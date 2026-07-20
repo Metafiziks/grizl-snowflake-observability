@@ -1,0 +1,102 @@
+{
+  "_comment": "Resources that must be created manually or with guided CLI steps because their creation requires GCP permissions, Snowflake account admin access, or decisions not automatable in this repo. Equivalent to the Fabric and Databricks manual-resources.json.",
+  "manual_resources": [
+    {
+      "name": "GCS Pub/Sub Cloud Storage Export Subscription",
+      "platform": "GCP",
+      "why_manual": "Requires GCP project permissions outside this repo. If already created for grizl-databricks-observability, this subscription exists and the same GCS bucket can be reused — no change needed.",
+      "steps": [
+        "gcloud storage buckets create gs://<GCS_LOGS_BUCKET> --project=<GCP_PROJECT_ID> --location=<REGION>",
+        "gcloud pubsub subscriptions create grizl-logs-gcs-export --topic=grizl-log-topic --project=<GCP_PROJECT_ID> --cloud-storage-bucket=<GCS_LOGS_BUCKET> --cloud-storage-file-prefix=logs/ --cloud-storage-file-suffix=.jsonl --cloud-storage-max-duration=60s --cloud-storage-output-format=text",
+        "NOTE: If the subscription already exists for Databricks, skip this step. Snowpipe reads files from the same GCS bucket."
+      ],
+      "env_vars": ["GCS_LOGS_BUCKET", "GCP_PROJECT_ID"]
+    },
+    {
+      "name": "Snowflake Storage Integration and GCS Notification Pub/Sub Topic",
+      "platform": "Snowflake / GCP",
+      "why_manual": "Storage integration requires ACCOUNTADMIN. GCS notification topic requires GCP project permissions.",
+      "steps": [
+        "Run as ACCOUNTADMIN: CREATE STORAGE INTEGRATION GRIZL_GCS_INTEGRATION ... (in sql/grizl-observability.sql)",
+        "Run: bash snowflake/scripts/snowpipe-mgmt.sh show-svc",
+        "Grant the STORAGE_GCP_SERVICE_ACCOUNT email objectViewer on the GCS bucket:",
+        "  gsutil iam ch serviceAccount:<STORAGE_GCP_SERVICE_ACCOUNT>:objectViewer gs://<GCS_LOGS_BUCKET>",
+        "Create GCS notification Pub/Sub topic for AUTO_INGEST:",
+        "  gcloud storage buckets notifications create gs://<GCS_LOGS_BUCKET> --topic=<PUBSUB_SNOWPIPE_TOPIC> --event-types=OBJECT_FINALIZE --payload-format=JSON --prefix=logs/",
+        "Grant the Snowflake service account roles/pubsub.subscriber on the notification topic."
+      ],
+      "reference": "snowflake/manifests/snowpipe-config.example.json"
+    },
+    {
+      "name": "Snowflake CLI Connection Profile",
+      "platform": "Snowflake CLI",
+      "why_manual": "Connection profile is per-developer and stored in ~/.snowflake/connections.toml.",
+      "steps": [
+        "Install Snowflake CLI: pip install snowflake-cli-labs",
+        "snow connection add grizl --account <ACCOUNT> --user <USER> --role grizl_role --warehouse grizl_wh --database grizl --schema observability --authenticator externalbrowser",
+        "snow connection test --connection grizl",
+        "Copy account identifier into SNOWFLAKE_ACCOUNT in grizl.snowflake.env"
+      ],
+      "env_vars": ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_CONNECTION"]
+    },
+    {
+      "name": "Cortex Analyst Semantic Model Stage",
+      "platform": "Snowflake",
+      "why_manual": "Stage creation and YAML file upload require connection to the Snowflake account.",
+      "steps": [
+        "Create a stage: snow sql --connection grizl -q \"CREATE STAGE IF NOT EXISTS GRIZL.OBSERVABILITY.SEMANTIC_MODELS_STAGE;\"",
+        "Upload the semantic model: snow stage upload snowflake/manifests/cortex-analyst-semantic-model.example.yaml @GRIZL.OBSERVABILITY.SEMANTIC_MODELS_STAGE/grizl-semantic-model.yaml --connection grizl",
+        "Update cortex-agent-config.example.json with the stage path",
+        "Test: bash snowflake/scripts/cortex-agent-mgmt.sh test-analyst 'What is the error rate in the last hour?'"
+      ]
+    },
+    {
+      "name": "Orchestrator Webhook Secret",
+      "platform": "Snowflake",
+      "why_manual": "The secret stores your actual orchestrator webhook URL — not included in this repo.",
+      "steps": [
+        "Run: snow sql --connection grizl -q \"ALTER SECRET GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET SET SECRET_STRING = 'https://your-actual-orchestrator.com/api/snowflake/incidents';\"",
+        "Verify: snow sql --connection grizl -q \"SELECT NAME, CREATED FROM GRIZL.OBSERVABILITY.SECRETS;\"",
+        "The stored procedure SP_NOTIFY_ANOMALY_INCIDENT reads this secret at runtime via _snowflake.get_generic_secret_string()."
+      ]
+    },
+    {
+      "name": "Snowflake Alert — Resume After Configuration",
+      "platform": "Snowflake",
+      "why_manual": "Alerts are created SUSPENDED by default. Resume only after the webhook secret and external access integration are configured.",
+      "steps": [
+        "Confirm orchestrator webhook is live and reachable",
+        "snow sql --connection grizl -q \"ALTER ALERT GRIZL.OBSERVABILITY.GRIZL_ANOMALY_ALERT RESUME;\"",
+        "Verify: snow sql --connection grizl -q \"SHOW ALERTS IN SCHEMA GRIZL.OBSERVABILITY;\""
+      ]
+    },
+    {
+      "name": "Cortex ML Model Training (Optional — Enterprise+ only)",
+      "platform": "Snowflake",
+      "why_manual": "Requires 2+ days of data in Dynamic Tables before training. Models are large objects that require ACCOUNTADMIN or ML_USER role.",
+      "steps": [
+        "Wait for >= 2 days of data in GRIZL.OBSERVABILITY.DT_HTTP_ERROR_RATE",
+        "Grant ML privileges: snow sql --connection grizl -q \"GRANT DATABASE ROLE SNOWFLAKE.ML_USER TO ROLE GRIZL_ROLE;\"",
+        "Train models: snow sql --connection grizl --filename sql/grizl-cortex-ml.sql",
+        "Resume detection tasks:",
+        "  snow sql --connection grizl -q \"ALTER TASK GRIZL.OBSERVABILITY.TASK_DETECT_ERROR_RATE RESUME;\"",
+        "  snow sql --connection grizl -q \"ALTER TASK GRIZL.OBSERVABILITY.TASK_DETECT_ROUTE_LATENCY RESUME;\"",
+        "Once tasks are running, optionally update the Alert to use GRIZL_RECENT_ANOMALY_SIGNALS_ML instead of GRIZL_RECENT_ANOMALY_SIGNALS"
+      ],
+      "note": "The SQL z-score views (grizl-anomaly-signals.sql) work without Cortex ML and are the default path. Cortex ML ANOMALY_DETECTION is the optional upgrade once training data is available."
+    },
+    {
+      "name": "External Incident Orchestrator",
+      "platform": "External (your backend)",
+      "why_manual": "The orchestrator is an external service that receives Alert webhook POSTs. It calls the Cortex Agent REST API for evidence and then calls the GitHub API. The implementation lives outside this repo.",
+      "contract": "See docs/snowflake-incident-orchestrator.md for the full request/response contract.",
+      "steps": [
+        "Implement POST /api/snowflake/incidents endpoint",
+        "Parse the signals array from SP_NOTIFY_ANOMALY_INCIDENT payload",
+        "Call Cortex Agent REST API with cortex-agent-config.example.json template",
+        "Create GitHub issue with anomaly fields + Cortex Agent evidence",
+        "Assign Copilot via GraphQL addAssigneesToAssignable mutation (node ID: BOT_kgDOC9w8XQ) if policy allows"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@grizl/snowflake-observability-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Snowflake CLI wrapper scripts for the GRIZL Snowflake observability package.",
+  "scripts": {
+    "check":                     "bash scripts/check.sh",
+    "provision:dry-run":         "bash scripts/provision.sh --dry-run --all",
+    "provision":                 "bash scripts/provision.sh --yes --all",
+    "sql:observability:dry-run": "bash scripts/sql-exec.sh --dry-run --file ../sql/grizl-observability.sql",
+    "sql:observability":         "bash scripts/sql-exec.sh --yes --file ../sql/grizl-observability.sql",
+    "sql:dynamic-tables:dry-run":"bash scripts/sql-exec.sh --dry-run --file ../sql/grizl-dynamic-tables.sql",
+    "sql:dynamic-tables":        "bash scripts/sql-exec.sh --yes --file ../sql/grizl-dynamic-tables.sql",
+    "sql:anomaly-signals:dry-run":"bash scripts/sql-exec.sh --dry-run --file ../sql/grizl-anomaly-signals.sql",
+    "sql:anomaly-signals":       "bash scripts/sql-exec.sh --yes --file ../sql/grizl-anomaly-signals.sql",
+    "sql:cortex-ml:dry-run":     "bash scripts/sql-exec.sh --dry-run --file ../sql/grizl-cortex-ml.sql",
+    "sql:cortex-ml":             "bash scripts/sql-exec.sh --yes --file ../sql/grizl-cortex-ml.sql",
+    "sql:alert-queries:dry-run": "bash scripts/sql-exec.sh --dry-run --file ../sql/grizl-alert-queries.sql",
+    "sql:alert-queries":         "bash scripts/sql-exec.sh --yes --file ../sql/grizl-alert-queries.sql",
+    "teardown:dry-run":          "bash scripts/teardown.sh --dry-run --all",
+    "teardown":                  "bash scripts/teardown.sh --yes --all"
+  }
+}

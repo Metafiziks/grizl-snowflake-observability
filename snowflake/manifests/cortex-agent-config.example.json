@@ -1,0 +1,52 @@
+{
+  "_comment": "Cortex Agent REST API payload template for the external incident orchestrator. The orchestrator POSTs this payload to https://<account>.snowflakecomputing.com/api/v2/cortex/agent:run with a valid Bearer token to retrieve incident evidence. Replace placeholder values before use.",
+  "model": "claude-snowflake-cortex-4",
+  "tools": [
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "cortex_analyst_grizl",
+        "description": "Query structured GRIZL observability telemetry: HTTP request error rates, latency distributions, error signatures, deployment history, and forwarder health. Use for questions with deterministic SQL answers over time-series data.",
+        "cortex_analyst_tool_spec": {
+          "semantic_model_file": "@GRIZL.OBSERVABILITY.SEMANTIC_MODELS_STAGE/grizl-semantic-model.yaml"
+        }
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_search",
+        "name": "cortex_search_grizl_knowledge",
+        "description": "Semantic search over GRIZL postmortems, runbooks, and architecture notes. Use for historical context, similar past incidents, and recommended remediation steps.",
+        "cortex_search_tool_spec": {
+          "service_name": "GRIZL.KNOWLEDGE.ARTICLE_SEARCH_SVC",
+          "max_results": 5,
+          "id_column": "ARTICLE_ID"
+        }
+      }
+    }
+  ],
+  "tool_resources": {
+    "cortex_analyst_grizl": {
+      "semantic_model_file": "@GRIZL.OBSERVABILITY.SEMANTIC_MODELS_STAGE/grizl-semantic-model.yaml"
+    }
+  },
+  "example_messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What are the most recent 5xx errors for grizl-backend on route /api/chat in the last 30 minutes? Include deployment SHA and error signature."
+        }
+      ]
+    }
+  ],
+  "_incident_orchestrator_notes": {
+    "auth": "Generate a short-lived JWT or OAuth token per request. For M2M: use Snowflake service account key-pair auth. See: https://docs.snowflake.com/en/developer-guide/sql-api/authenticating",
+    "evidence_question_template": "What are the most recent errors for {service} on route {route} with deployment SHA {deployment_sha} in the last 30 minutes? Include error signature, error rate, and any related anomaly signals.",
+    "search_query_template": "{signal_type} {service} {route} runbook remediation root cause",
+    "response_format": "The agent returns a streaming SSE response. Parse 'data:' lines as JSON, accumulate 'delta' content blocks of type 'text', join into the evidence summary string.",
+    "rate_limits": "Cortex Agent requests count against your Snowflake Cortex token budget. Budget is per-account and per-model. Monitor usage in Snowflake account usage views: SNOWFLAKE.ACCOUNT_USAGE.CORTEX_ANALYST_USAGE_HISTORY.",
+    "fallback": "If the Cortex Agent API is unavailable, fall back to direct SQL: SELECT ... FROM GRIZL.OBSERVABILITY.APPLICATION_ERRORS WHERE SERVICE = '{service}' AND INGEST_TIMESTAMP >= DATEADD('minute', -30, CURRENT_TIMESTAMP()) LIMIT 10"
+  }
+}

@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="627" viewBox="0 0 1200 627" role="img" aria-labelledby="bannerTitle bannerDesc">
+  <title id="bannerTitle">Part VII Snowflake anomaly signal banner</title>
+  <desc id="bannerDesc">Editorial banner for a LinkedIn article about Snowflake Cortex ML anomaly detection and Cortex Agents incident evidence automation.</desc>
+  <defs>
+    <linearGradient id="mainBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0"    stop-color="#060b12"/>
+      <stop offset="0.5"  stop-color="#081018"/>
+      <stop offset="1"    stop-color="#060c15"/>
+    </linearGradient>
+    <radialGradient id="leftBloom" cx="28%" cy="55%" r="52%">
+      <stop offset="0"   stop-color="#29b5e8" stop-opacity="0.14"/>
+      <stop offset="0.6" stop-color="#0073b3" stop-opacity="0.04"/>
+      <stop offset="1"   stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="panelBloom" cx="80%" cy="40%" r="35%">
+      <stop offset="0"   stop-color="#56d3f5" stop-opacity="0.09"/>
+      <stop offset="1"   stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1.1" fill="#29b5e8" fill-opacity="0.06"/>
+    </pattern>
+    <filter id="spike" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="mlGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Ground -->
+  <rect width="1200" height="627" fill="url(#mainBg)"/>
+  <rect width="1200" height="627" fill="url(#dots)"/>
+  <rect width="1200" height="627" fill="url(#leftBloom)"/>
+  <rect width="1200" height="627" fill="url(#panelBloom)"/>
+
+  <!-- Top rule: short blue line -->
+  <line x1="72" y1="66" x2="620" y2="66" stroke="#29b5e8" stroke-width="2.5" stroke-opacity="0.65"/>
+
+  <!-- ── LEFT TEXT BLOCK ─────────────────────────────── -->
+  <g transform="translate(72,82)">
+    <!-- Series eyebrow -->
+    <text font-family="Menlo,Consolas,'Courier New',monospace" font-size="18" letter-spacing="4.5" fill="#56d3f5">PART VII / SNOWFLAKE</text>
+
+    <!-- Headline -->
+    <text y="90"  font-family="Georgia,'Times New Roman',serif" font-weight="800" font-size="68" letter-spacing="-2" fill="#E8F4FB">THE PANIC BUTTON</text>
+    <text y="166" font-family="Georgia,'Times New Roman',serif" font-weight="800" font-size="68" letter-spacing="-2" fill="#E8F4FB">NOW CITES</text>
+    <text y="242" font-family="Georgia,'Times New Roman',serif" font-weight="800" font-size="68" letter-spacing="-2" fill="#29b5e8">POSTMORTEMS</text>
+
+    <!-- Sub-headline -->
+    <text y="302" font-family="Menlo,Consolas,'Courier New',monospace" font-size="20" fill="#4a6a82">Cortex ML. Dynamic Tables. Incidents with receipts.</text>
+  </g>
+
+  <!-- Bottom divider -->
+  <line x1="72" y1="538" x2="640" y2="538" stroke="#0d1a28" stroke-width="1"/>
+
+  <!-- Pipeline pill -->
+  <rect x="72" y="552" width="526" height="50" rx="25" fill="#29b5e8"/>
+  <text x="88" y="583" font-family="Menlo,Consolas,'Courier New',monospace" font-size="17" font-weight="700" fill="#020810" letter-spacing="0.2">SNOWPIPE &#8594; CORTEX ML &#8594; ALERT &#8594; GITHUB</text>
+
+  <!-- ── RIGHT PANEL ─────────────────────────────────── -->
+  <!-- Panel outer glow -->
+  <rect x="736" y="58" width="408" height="484" rx="26" fill="#29b5e8" fill-opacity="0.04" filter="url(#softGlow)"/>
+  <!-- Panel body -->
+  <rect x="740" y="62" width="400" height="476" rx="24" fill="#04090f" stroke="#29b5e8" stroke-width="1.5" stroke-opacity="0.5"/>
+
+  <!-- Header bar -->
+  <rect x="740" y="62" width="400" height="46" rx="24" fill="#29b5e8" fill-opacity="0.08"/>
+  <rect x="740" y="84" width="400" height="24" fill="#29b5e8" fill-opacity="0.08"/>
+  <!-- Traffic dots -->
+  <circle cx="772" cy="85" r="6.5" fill="#29b5e8" fill-opacity="0.55"/>
+  <circle cx="796" cy="85" r="6.5" fill="#2a3d52" fill-opacity="0.4"/>
+  <circle cx="820" cy="85" r="6.5" fill="#2a3d52" fill-opacity="0.4"/>
+  <!-- Header label -->
+  <text x="848" y="91" font-family="Menlo,Consolas,'Courier New',monospace" font-size="14" letter-spacing="2.5" fill="#56d3f5">CORTEX ML / IS_ANOMALY</text>
+
+  <!-- Chart inner area: x 760..1118, y 120..490 -->
+  <!-- Confidence band (lower..upper), then forecast line, then actual line -->
+  <!-- y scale: 0..100 error_rate_pct → y 490..120, range 370px → 3.7px per pct -->
+
+  <!-- Horizontal grid lines at 0%, 25%, 50%, 75% -->
+  <!-- y=490 (0%), y=397 (25%), y=305 (50%), y=213 (75%) -->
+  <line x1="762" y1="490" x2="1118" y2="490" stroke="#0e1e2e" stroke-width="1"/>
+  <line x1="762" y1="397" x2="1118" y2="397" stroke="#0e1e2e" stroke-width="1"/>
+  <line x1="762" y1="305" x2="1118" y2="305" stroke="#0e1e2e" stroke-width="1"/>
+  <line x1="762" y1="213" x2="1118" y2="213" stroke="#0e1e2e" stroke-width="1"/>
+
+  <!-- Y-axis labels -->
+  <text x="758" y="494" text-anchor="end" font-family="Menlo,Consolas,monospace" font-size="11" fill="#2a4a6a">0%</text>
+  <text x="758" y="401" text-anchor="end" font-family="Menlo,Consolas,monospace" font-size="11" fill="#2a4a6a">25%</text>
+  <text x="758" y="309" text-anchor="end" font-family="Menlo,Consolas,monospace" font-size="11" fill="#2a4a6a">50%</text>
+  <text x="758" y="217" text-anchor="end" font-family="Menlo,Consolas,monospace" font-size="11" fill="#2a4a6a">75%</text>
+
+  <!-- x positions: 10 points from 762 to 1110, step ~38.7 -->
+  <!-- error_rate baseline ~2%: y = 490 - 2*3.7 = 482 -->
+  <!-- spike to 38%: y = 490 - 38*3.7 = 349 -->
+
+  <!-- Confidence band (upper..lower polygon): baseline upper ~6%, lower ~0% → y=[467,490] -->
+  <!-- At spike, upper=45%, lower=30% → y=[324,378] - but we only show the band for baseline, not the spike itself -->
+  <!-- Confidence band polygon for the first 9 points (baseline), clamp to chart area -->
+  <!-- Upper bound baseline (~6%): y = 490 - 6*3.7 = 468 -->
+  <!-- Lower bound baseline (~0%): y = 490 -->
+  <!-- Upper bound at spike (45%): y = 490 - 45*3.7 = 324 -->
+  <!-- Lower bound at spike (30%): y = 490 - 30*3.7 = 379 -->
+  <polygon
+    points="762,468 801,470 840,466 878,471 917,468 956,465 994,469 1033,467 1072,469 1110,324
+            1110,379 1072,490 1033,490 994,490 956,490 917,490 878,490 840,490 801,490 762,490"
+    fill="#29b5e8"
+    fill-opacity="0.07"
+  />
+
+  <!-- Forecast line (what Cortex ML predicted): ~2% throughout, no spike -->
+  <polyline
+    points="762,483 801,482 840,484 878,481 917,483 956,480 994,482 1033,483 1072,481 1110,482"
+    fill="none"
+    stroke="#29b5e8"
+    stroke-width="1.8"
+    stroke-dasharray="5 3"
+    stroke-opacity="0.55"
+  />
+
+  <!-- Actual error rate line: baseline ~2%, then spike to 38% at last point -->
+  <!-- y for ~2%: 490 - 2*3.7 = 482 -->
+  <!-- y for 38%: 490 - 38*3.7 = 349 -->
+  <polyline
+    points="762,483 801,480 840,485 878,479 917,484 956,477 994,481 1033,479 1072,480 1110,349"
+    fill="none"
+    stroke="#56d3f5"
+    stroke-width="2.8"
+    stroke-linejoin="round"
+    stroke-linecap="round"
+    filter="url(#spike)"
+  />
+  <!-- Area fill under actual -->
+  <polygon
+    points="762,483 801,480 840,485 878,479 917,484 956,477 994,481 1033,479 1072,480 1110,349 1110,490 762,490"
+    fill="#56d3f5"
+    fill-opacity="0.04"
+  />
+
+  <!-- Dot markers on baseline actual points -->
+  <circle cx="762"  cy="483" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="801"  cy="480" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="840"  cy="485" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="878"  cy="479" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="917"  cy="484" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="956"  cy="477" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="994"  cy="481" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="1033" cy="479" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+  <circle cx="1072" cy="480" r="3.5" fill="#56d3f5" fill-opacity="0.5"/>
+
+  <!-- Spike point with ML confidence interval bars -->
+  <!-- Confidence interval vertical bar at x=1110 from y=324 (upper=45%) to y=379 (lower=30%) -->
+  <line x1="1110" y1="324" x2="1110" y2="379" stroke="#29b5e8" stroke-width="3" stroke-opacity="0.6"/>
+  <line x1="1100" y1="324" x2="1120" y2="324" stroke="#29b5e8" stroke-width="2" stroke-opacity="0.6"/>
+  <line x1="1100" y1="379" x2="1120" y2="379" stroke="#29b5e8" stroke-width="2" stroke-opacity="0.6"/>
+  <!-- Actual spike point -->
+  <circle cx="1110" cy="349" r="13" fill="#29b5e8" fill-opacity="0.25" filter="url(#mlGlow)"/>
+  <circle cx="1110" cy="349" r="8"  fill="#29b5e8"/>
+  <circle cx="1110" cy="349" r="4"  fill="#E8F4FB"/>
+
+  <!-- Annotation bubble: IS_ANOMALY = TRUE -->
+  <rect x="1008" y="296" width="148" height="34" rx="7" fill="#29b5e8" fill-opacity="0.15"/>
+  <rect x="1008" y="296" width="148" height="34" rx="7" fill="none" stroke="#29b5e8" stroke-width="1" stroke-opacity="0.55"/>
+  <text x="1082" y="309" text-anchor="middle" font-family="Menlo,Consolas,'Courier New',monospace" font-size="12" fill="#56d3f5">IS_ANOMALY = TRUE</text>
+  <text x="1082" y="325" text-anchor="middle" font-family="Menlo,Consolas,'Courier New',monospace" font-size="12" font-weight="700" fill="#29b5e8">DISTANCE = 45.25</text>
+  <!-- Connector -->
+  <line x1="1082" y1="330" x2="1110" y2="349" stroke="#29b5e8" stroke-width="1.2" stroke-opacity="0.5" stroke-dasharray="4 3"/>
+
+  <!-- Legend: actual vs forecast vs confidence band -->
+  <line x1="762" y1="450" x2="790" y2="450" stroke="#56d3f5" stroke-width="2.5"/>
+  <text x="796" y="454" font-family="Menlo,Consolas,monospace" font-size="11" fill="#4a7a9a">actual</text>
+  <line x1="840" y1="450" x2="868" y2="450" stroke="#29b5e8" stroke-width="1.8" stroke-dasharray="5 3" stroke-opacity="0.6"/>
+  <text x="874" y="454" font-family="Menlo,Consolas,monospace" font-size="11" fill="#4a7a9a">forecast</text>
+  <rect x="928" y="444" width="16" height="10" fill="#29b5e8" fill-opacity="0.2" rx="2"/>
+  <text x="950" y="454" font-family="Menlo,Consolas,monospace" font-size="11" fill="#4a7a9a">CI</text>
+
+  <!-- Bottom info rows -->
+  <line x1="762" y1="504" x2="1118" y2="504" stroke="#0d1a28" stroke-width="1"/>
+  <text x="762" y="522" font-family="Menlo,Consolas,monospace" font-size="12" fill="#2a4a6a">service: grizl-backend  route: /api/chat</text>
+  <text x="762" y="540" font-family="Menlo,Consolas,monospace" font-size="12" fill="#29b5e8" fill-opacity="0.8">&#8594; issue #312 &#183; cortex search: PM-2026-04-12 &#183; copilot assigned</text>
+
+  <!-- Brand -->
+  <text transform="rotate(-90 1178 498)" x="1178" y="498" font-family="Menlo,Consolas,monospace" font-size="15" fill="#1a2d40">METAFIZIK</text>
+</svg>

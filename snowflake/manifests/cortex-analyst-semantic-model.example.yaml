@@ -1,0 +1,201 @@
+name: grizl_observability_semantic_model
+description: >
+  Semantic model for GRIZL application observability telemetry.
+  Covers HTTP request metrics, application errors, deployment events,
+  and forwarder health from the GRIZL.OBSERVABILITY schema.
+
+tables:
+  - name: HTTP_REQUESTS
+    description: HTTP request events from grizl-backend and grizl-frontend, with latency and status codes.
+    base_table:
+      database: GRIZL
+      schema: OBSERVABILITY
+      table: HTTP_REQUESTS
+    time_dimensions:
+      - name: ingest_timestamp
+        expr: INGEST_TIMESTAMP
+        unique: false
+        data_type: timestamp_ltz
+        description: When the event landed in Snowflake.
+      - name: source_timestamp
+        expr: SOURCE_TIMESTAMP
+        unique: false
+        data_type: timestamp_ltz
+        description: Original event timestamp from the application.
+    dimensions:
+      - name: service
+        expr: SERVICE
+        data_type: varchar
+        description: Service name (grizl-backend, grizl-frontend).
+        sample_values: [grizl-backend, grizl-frontend]
+      - name: route
+        expr: ROUTE
+        data_type: varchar
+        description: HTTP route path (/api/chat, /api/status, /api/health).
+      - name: method
+        expr: METHOD
+        data_type: varchar
+        description: HTTP method (GET, POST, DELETE).
+      - name: status_code
+        expr: STATUS_CODE
+        data_type: number
+        description: HTTP response status code.
+      - name: deployment_sha
+        expr: DEPLOYMENT_SHA
+        data_type: varchar
+        description: Git commit SHA of the running deployment.
+      - name: environment
+        expr: ENVIRONMENT
+        data_type: varchar
+        description: Deployment environment (production, staging).
+    measures:
+      - name: request_count
+        expr: COUNT(*)
+        data_type: number
+        description: Total number of HTTP requests.
+      - name: error_count
+        expr: "SUM(IFF(STATUS_CODE >= 500 OR SEVERITY IN ('ERROR', 'CRITICAL'), 1, 0))"
+        data_type: number
+        description: Count of error or 5xx requests.
+      - name: error_rate
+        expr: "DIV0(SUM(IFF(STATUS_CODE >= 500, 1.0, 0.0)), COUNT(*))"
+        data_type: float
+        description: Fraction of requests that resulted in a 5xx error.
+      - name: avg_latency_ms
+        expr: AVG(DURATION_MS)
+        data_type: float
+        description: Mean request latency in milliseconds.
+      - name: p95_latency_ms
+        expr: "PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY DURATION_MS)"
+        data_type: float
+        description: 95th percentile request latency in milliseconds.
+
+  - name: APPLICATION_ERRORS
+    description: Application error events with error signatures. Use to identify error patterns and correlation with deployments.
+    base_table:
+      database: GRIZL
+      schema: OBSERVABILITY
+      table: APPLICATION_ERRORS
+    time_dimensions:
+      - name: ingest_timestamp
+        expr: INGEST_TIMESTAMP
+        unique: false
+        data_type: timestamp_ltz
+    dimensions:
+      - name: service
+        expr: SERVICE
+        data_type: varchar
+      - name: error_signature
+        expr: ERROR_SIGNATURE
+        data_type: varchar
+        description: Stable error key combining error type and route.
+      - name: error_type
+        expr: ERROR_TYPE
+        data_type: varchar
+        description: Exception class or error category.
+      - name: error_message
+        expr: ERROR_MESSAGE
+        data_type: varchar
+      - name: deployment_sha
+        expr: DEPLOYMENT_SHA
+        data_type: varchar
+      - name: severity
+        expr: SEVERITY
+        data_type: varchar
+    measures:
+      - name: error_count
+        expr: COUNT(*)
+        data_type: number
+        description: Total error events.
+
+  - name: DEPLOYMENTS
+    description: Deployment and service startup events. Use to correlate deployments with error rate changes.
+    base_table:
+      database: GRIZL
+      schema: OBSERVABILITY
+      table: DEPLOYMENTS
+    time_dimensions:
+      - name: ingest_timestamp
+        expr: INGEST_TIMESTAMP
+        unique: false
+        data_type: timestamp_ltz
+    dimensions:
+      - name: service
+        expr: SERVICE
+        data_type: varchar
+      - name: deployment_sha
+        expr: DEPLOYMENT_SHA
+        data_type: varchar
+      - name: environment
+        expr: ENVIRONMENT
+        data_type: varchar
+
+  - name: GRIZL_RECENT_ANOMALY_SIGNALS
+    description: Current anomaly signals from the last 15 minutes. Use to identify which signals are active right now.
+    base_table:
+      database: GRIZL
+      schema: OBSERVABILITY
+      table: GRIZL_RECENT_ANOMALY_SIGNALS
+    time_dimensions:
+      - name: time_bin
+        expr: TIME_BIN
+        unique: false
+        data_type: timestamp_ltz
+    dimensions:
+      - name: signal_type
+        expr: SIGNAL_TYPE
+        data_type: varchar
+        description: backend_http_error_rate, route_latency_p95, error_signature_spike, forwarder_freshness_drop, forwarder_drop_failure, post_deployment_regression
+      - name: service
+        expr: SERVICE
+        data_type: varchar
+      - name: route
+        expr: ROUTE
+        data_type: varchar
+    measures:
+      - name: anomaly_score
+        expr: MAX(ANOMALY_SCORE)
+        data_type: float
+        description: Z-score of the anomaly. Values >= 1.5 trigger alerts.
+      - name: signal_count
+        expr: COUNT(*)
+        data_type: number
+
+verified_queries:
+  - name: error_rate_last_hour
+    question: "What is the error rate per service in the last hour?"
+    sql: >
+      SELECT SERVICE,
+        COUNT(*) AS REQUESTS,
+        SUM(IFF(STATUS_CODE >= 500 OR SEVERITY IN ('ERROR', 'CRITICAL'), 1, 0)) AS ERRORS,
+        ROUND(DIV0(SUM(IFF(STATUS_CODE >= 500, 1.0, 0.0)), COUNT(*)) * 100, 2) AS ERROR_RATE_PCT
+      FROM GRIZL.OBSERVABILITY.HTTP_REQUESTS
+      WHERE INGEST_TIMESTAMP >= CURRENT_TIMESTAMP() - INTERVAL '1 hour'
+      GROUP BY 1
+      ORDER BY ERROR_RATE_PCT DESC
+
+  - name: top_errors_last_30min
+    question: "What are the most common errors in the last 30 minutes?"
+    sql: >
+      SELECT SERVICE, ERROR_SIGNATURE, COUNT(*) AS ERROR_COUNT, MAX(INGEST_TIMESTAMP) AS LAST_SEEN
+      FROM GRIZL.OBSERVABILITY.APPLICATION_ERRORS
+      WHERE INGEST_TIMESTAMP >= CURRENT_TIMESTAMP() - INTERVAL '30 minutes'
+      GROUP BY 1, 2
+      ORDER BY ERROR_COUNT DESC
+      LIMIT 10
+
+  - name: recent_deployments
+    question: "What deployments happened in the last 24 hours?"
+    sql: >
+      SELECT SERVICE, DEPLOYMENT_SHA, INGEST_TIMESTAMP, ENVIRONMENT
+      FROM GRIZL.OBSERVABILITY.DEPLOYMENTS
+      WHERE INGEST_TIMESTAMP >= CURRENT_TIMESTAMP() - INTERVAL '24 hours'
+      ORDER BY INGEST_TIMESTAMP DESC
+
+  - name: active_anomaly_signals
+    question: "What anomaly signals are active right now?"
+    sql: >
+      SELECT SIGNAL_TYPE, SERVICE, ROUTE, ROUND(ANOMALY_SCORE, 2) AS ANOMALY_SCORE,
+             ROUND(ACTUAL, 4) AS ACTUAL, ROUND(BASELINE_MEAN, 4) AS BASELINE
+      FROM GRIZL.OBSERVABILITY.GRIZL_RECENT_ANOMALY_SIGNALS
+      ORDER BY ANOMALY_SCORE DESC

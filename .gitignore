@@ -1,0 +1,7 @@
+node_modules/
+snowflake/config/grizl.snowflake.env
+*.p8
+*.pem
+*.key
+.env
+.DS_Store

@@ -1,0 +1,24 @@
+{
+  "name": "@grizl/snowflake-observability",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GRIZL Snowflake observability package — Snowpipe ingestion, SQL views, Dynamic Tables, Cortex ML anomaly detection, Cortex Agents evidence, and Snowflake Alert incident triggers.",
+  "license": "UNLICENSED",
+  "scripts": {
+    "snowflake:check":                     "npm --prefix snowflake run check",
+    "snowflake:provision:dry-run":         "npm --prefix snowflake run provision:dry-run",
+    "snowflake:provision":                 "npm --prefix snowflake run provision",
+    "snowflake:sql:observability:dry-run": "npm --prefix snowflake run sql:observability:dry-run",
+    "snowflake:sql:observability":         "npm --prefix snowflake run sql:observability",
+    "snowflake:sql:dynamic-tables:dry-run":"npm --prefix snowflake run sql:dynamic-tables:dry-run",
+    "snowflake:sql:dynamic-tables":        "npm --prefix snowflake run sql:dynamic-tables",
+    "snowflake:sql:anomaly-signals:dry-run":"npm --prefix snowflake run sql:anomaly-signals:dry-run",
+    "snowflake:sql:anomaly-signals":       "npm --prefix snowflake run sql:anomaly-signals",
+    "snowflake:sql:cortex-ml:dry-run":     "npm --prefix snowflake run sql:cortex-ml:dry-run",
+    "snowflake:sql:cortex-ml":             "npm --prefix snowflake run sql:cortex-ml",
+    "snowflake:sql:alert-queries:dry-run": "npm --prefix snowflake run sql:alert-queries:dry-run",
+    "snowflake:sql:alert-queries":         "npm --prefix snowflake run sql:alert-queries",
+    "snowflake:teardown:dry-run":          "npm --prefix snowflake run teardown:dry-run",
+    "snowflake:teardown":                  "npm --prefix snowflake run teardown"
+  }
+}

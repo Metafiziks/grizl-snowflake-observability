@@ -1,0 +1,50 @@
+{
+  "_comment": "Snowpipe AUTO_INGEST configuration reference. The actual pipe DDL is in sql/grizl-observability.sql. This file documents the GCP-side setup steps required before Snowpipe can receive notifications from GCS.",
+  "snowpipe": {
+    "pipe_name": "GRIZL.OBSERVABILITY.RAW_LOGS_PIPE",
+    "source_stage": "GRIZL.OBSERVABILITY.GCS_LOGS_STAGE",
+    "target_table": "GRIZL.OBSERVABILITY.RAW_LOGS",
+    "auto_ingest": true,
+    "notification_channel": "GCS object notifications via Pub/Sub"
+  },
+  "gcp_setup_steps": [
+    {
+      "step": 1,
+      "name": "Create GCS bucket",
+      "command": "gcloud storage buckets create gs://<GCS_LOGS_BUCKET> --project=<GCP_PROJECT_ID> --location=<REGION>",
+      "note": "Can reuse the same bucket already used by grizl-databricks-observability. The GCS export subscription writes to /logs/ prefix."
+    },
+    {
+      "step": 2,
+      "name": "Create Pub/Sub Cloud Storage export subscription (if not already created for Databricks)",
+      "command": "gcloud pubsub subscriptions create grizl-logs-gcs-export --topic=grizl-log-topic --project=<GCP_PROJECT_ID> --cloud-storage-bucket=<GCS_LOGS_BUCKET> --cloud-storage-file-prefix=logs/ --cloud-storage-file-suffix=.jsonl --cloud-storage-max-duration=60s --cloud-storage-output-format=text",
+      "note": "If already created for the Databricks version, this subscription already exists — Snowpipe reads the same files."
+    },
+    {
+      "step": 3,
+      "name": "Create Snowflake storage integration",
+      "command": "Run CREATE STORAGE INTEGRATION in sql/grizl-observability.sql as ACCOUNTADMIN",
+      "note": "The integration creates a GCP service account (STORAGE_GCP_SERVICE_ACCOUNT). Use 'bash snowflake/scripts/snowpipe-mgmt.sh show-svc' to retrieve it."
+    },
+    {
+      "step": 4,
+      "name": "Grant Snowflake service account access to GCS bucket",
+      "command": "gsutil iam ch serviceAccount:<STORAGE_GCP_SERVICE_ACCOUNT>:objectViewer gs://<GCS_LOGS_BUCKET>",
+      "note": "Also grant roles/pubsub.subscriber if using GCS object notifications for AUTO_INGEST."
+    },
+    {
+      "step": 5,
+      "name": "Create GCS notification topic and subscription for Snowpipe",
+      "command": "gcloud storage buckets notifications create gs://<GCS_LOGS_BUCKET> --topic=<PUBSUB_SNOWPIPE_TOPIC> --event-types=OBJECT_FINALIZE --payload-format=JSON --prefix=logs/",
+      "note": "Then grant Snowflake service account roles/pubsub.subscriber on this topic. This topic is separate from the main grizl-log-topic."
+    },
+    {
+      "step": 6,
+      "name": "Configure pipe notification channel",
+      "command": "ALTER PIPE GRIZL.OBSERVABILITY.RAW_LOGS_PIPE REFRESH;",
+      "note": "After granting access, refresh the pipe to scan for any existing files. Snowpipe will then pick up new files automatically via GCS notifications."
+    }
+  ],
+  "ingest_latency_note": "Snowpipe AUTO_INGEST delivers new files typically within 1-2 minutes of the GCS object FINALIZE notification. For the grizl-databricks-observability Pub/Sub subscription with max-duration=60s, new JSONL files appear every ~60 seconds. End-to-end latency from app log to Snowflake RAW_LOGS row is typically under 3 minutes.",
+  "fallback_ingest_note": "If AUTO_INGEST is unavailable (e.g. Standard edition), replace the pipe with a Snowflake Task that runs COPY INTO every 5 minutes using MATCHING_SCHEMA = TRUE and PURGE = FALSE."
+}
