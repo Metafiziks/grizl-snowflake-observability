@@ -84,7 +84,12 @@ snow_exec_file() {
     printf '[DRY-RUN] Would execute file: %s\n\n' "${file}"
     return 0
   fi
+  # Substitute <PLACEHOLDER> tokens from environment before sending to Snowflake.
+  local sql
+  sql="$(sed \
+    -e "s|<GCS_LOGS_BUCKET>|${GCS_LOGS_BUCKET:-<GCS_LOGS_BUCKET>}|g" \
+    "${file}")"
   snow sql \
     --connection "${SNOWFLAKE_CONNECTION:-grizl}" \
-    --filename "${file}"
+    --query "${sql}"
 }

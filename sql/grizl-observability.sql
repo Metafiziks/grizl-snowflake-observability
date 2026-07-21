@@ -40,7 +40,7 @@ CREATE SCHEMA IF NOT EXISTS GRIZL.KNOWLEDGE
 --
 -- Replace <GCS_LOGS_BUCKET> with your bucket name before running.
 
-CREATE STORAGE INTEGRATION IF NOT EXISTS GRIZL_GCS_INTEGRATION
+CREATE OR REPLACE STORAGE INTEGRATION GRIZL_GCS_INTEGRATION
   TYPE = EXTERNAL_STAGE
   STORAGE_PROVIDER = 'GCS'
   ENABLED = TRUE
@@ -49,7 +49,7 @@ CREATE STORAGE INTEGRATION IF NOT EXISTS GRIZL_GCS_INTEGRATION
 
 -- ── GCS STAGE ────────────────────────────────────────────────────────────────
 
-CREATE STAGE IF NOT EXISTS GRIZL.OBSERVABILITY.GCS_LOGS_STAGE
+CREATE OR REPLACE STAGE GRIZL.OBSERVABILITY.GCS_LOGS_STAGE
   URL = 'gcs://<GCS_LOGS_BUCKET>/logs/'
   STORAGE_INTEGRATION = GRIZL_GCS_INTEGRATION
   FILE_FORMAT = (
@@ -97,70 +97,53 @@ COMMENT = 'GRIZL application log events. Populated by Snowpipe AUTO_INGEST from 
 
 -- ── SNOWPIPE (AUTO_INGEST) ────────────────────────────────────────────────────
 -- AUTO_INGEST = TRUE listens for GCS Object Finalize notifications on the bucket.
--- GCS notification setup (one-time, in GCP Console or gcloud):
---   gcloud storage buckets notifications create gs://<GCS_LOGS_BUCKET> \
---     --topic=<PUBSUB_SNOWPIPE_TOPIC> --event-types=OBJECT_FINALIZE \
---     --payload-format=JSON --prefix=logs/
--- Then grant the Snowflake storage integration service account
--- roles/pubsub.subscriber on the Snowpipe notification topic.
--- See: snowflake/manifests/snowpipe-config.example.json
-
-CREATE PIPE IF NOT EXISTS GRIZL.OBSERVABILITY.RAW_LOGS_PIPE
-  AUTO_INGEST = TRUE
-  COMMENT = 'Snowpipe AUTO_INGEST from GCS Pub/Sub Cloud Storage export subscription.'
-AS
-COPY INTO GRIZL.OBSERVABILITY.RAW_LOGS (
-  INGEST_TIMESTAMP,
-  SOURCE_TIMESTAMP,
-  SERVICE,
-  ENVIRONMENT,
-  DEPLOYMENT_SHA,
-  SEVERITY,
-  EVENT_TYPE,
-  METHOD,
-  ROUTE,
-  STATUS_CODE,
-  DURATION_MS,
-  TRACE_ID,
-  REQUEST_ID,
-  ERROR_TYPE,
-  ERROR_MESSAGE,
-  ERROR_SIGNATURE,
-  PAGE,
-  API_STATUS,
-  SOURCE,
-  INSERT_ID,
-  PUBSUB_MESSAGE_ID
-)
-FROM (
-  SELECT
-    COALESCE(
-      TRY_TO_TIMESTAMP_LTZ($1:ingestTimestamp::STRING),
-      CURRENT_TIMESTAMP()
-    )                                                   AS INGEST_TIMESTAMP,
-    TRY_TO_TIMESTAMP_LTZ($1:sourceTimestamp::STRING)    AS SOURCE_TIMESTAMP,
-    $1:service::VARCHAR                                 AS SERVICE,
-    $1:environment::VARCHAR                             AS ENVIRONMENT,
-    $1:deploymentSha::VARCHAR                           AS DEPLOYMENT_SHA,
-    $1:severity::VARCHAR                                AS SEVERITY,
-    $1:eventType::VARCHAR                               AS EVENT_TYPE,
-    $1:httpRequest:method::VARCHAR                      AS METHOD,
-    $1:httpRequest:route::VARCHAR                       AS ROUTE,
-    TRY_TO_NUMBER($1:httpRequest:statusCode)            AS STATUS_CODE,
-    TRY_TO_DOUBLE($1:httpRequest:durationMs)            AS DURATION_MS,
-    $1:traceId::VARCHAR                                 AS TRACE_ID,
-    $1:requestId::VARCHAR                               AS REQUEST_ID,
-    $1:error:errorType::VARCHAR                         AS ERROR_TYPE,
-    $1:error:message::VARCHAR                           AS ERROR_MESSAGE,
-    $1:error:errorSignature::VARCHAR                    AS ERROR_SIGNATURE,
-    $1:page::VARCHAR                                    AS PAGE,
-    $1:apiStatus::VARCHAR                               AS API_STATUS,
-    $1:source::VARCHAR                                  AS SOURCE,
-    $1:insertId::VARCHAR                                AS INSERT_ID,
-    $1:pubsubMessageId::VARCHAR                         AS PUBSUB_MESSAGE_ID
-  FROM @GRIZL.OBSERVABILITY.GCS_LOGS_STAGE
-)
-FILE_FORMAT = (TYPE = 'JSON');
+-- This is a MANUAL STEP: create the pipe only after completing GCS setup:
+--   1. Create a GCS bucket and Pub/Sub notification topic for Snowpipe
+--   2. Grant the storage integration service account objectViewer on the bucket:
+--        DESCRIBE INTEGRATION GRIZL_GCS_INTEGRATION;
+--        -- copy STORAGE_GCP_SERVICE_ACCOUNT value, then:
+--        gsutil iam ch serviceAccount:<SA>:objectViewer gs://<GCS_LOGS_BUCKET>
+--   3. Grant the service account roles/pubsub.subscriber on the notification topic
+--   4. Then run the CREATE PIPE statement below
+--
+-- See: snowflake/manifests/snowpipe-config.example.json for full setup steps.
+--
+-- CREATE OR REPLACE PIPE GRIZL.OBSERVABILITY.RAW_LOGS_PIPE
+--   AUTO_INGEST = TRUE
+--   COMMENT = 'Snowpipe AUTO_INGEST from GCS Pub/Sub Cloud Storage export subscription.'
+-- AS
+-- COPY INTO GRIZL.OBSERVABILITY.RAW_LOGS (
+--   INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, DEPLOYMENT_SHA,
+--   SEVERITY, EVENT_TYPE, METHOD, ROUTE, STATUS_CODE, DURATION_MS, TRACE_ID,
+--   REQUEST_ID, ERROR_TYPE, ERROR_MESSAGE, ERROR_SIGNATURE, PAGE, API_STATUS,
+--   SOURCE, INSERT_ID, PUBSUB_MESSAGE_ID
+-- )
+-- FROM (
+--   SELECT
+--     COALESCE(TRY_TO_TIMESTAMP_LTZ($1:ingestTimestamp::STRING), CURRENT_TIMESTAMP()) AS INGEST_TIMESTAMP,
+--     TRY_TO_TIMESTAMP_LTZ($1:sourceTimestamp::STRING)    AS SOURCE_TIMESTAMP,
+--     $1:service::VARCHAR                                 AS SERVICE,
+--     $1:environment::VARCHAR                             AS ENVIRONMENT,
+--     $1:deploymentSha::VARCHAR                           AS DEPLOYMENT_SHA,
+--     $1:severity::VARCHAR                                AS SEVERITY,
+--     $1:eventType::VARCHAR                               AS EVENT_TYPE,
+--     $1:httpRequest:method::VARCHAR                      AS METHOD,
+--     $1:httpRequest:route::VARCHAR                       AS ROUTE,
+--     TRY_TO_NUMBER($1:httpRequest:statusCode::VARCHAR)   AS STATUS_CODE,
+--     TRY_TO_DOUBLE($1:httpRequest:durationMs::VARCHAR)   AS DURATION_MS,
+--     $1:traceId::VARCHAR                                 AS TRACE_ID,
+--     $1:requestId::VARCHAR                               AS REQUEST_ID,
+--     $1:error:errorType::VARCHAR                         AS ERROR_TYPE,
+--     $1:error:message::VARCHAR                           AS ERROR_MESSAGE,
+--     $1:error:errorSignature::VARCHAR                    AS ERROR_SIGNATURE,
+--     $1:page::VARCHAR                                    AS PAGE,
+--     $1:apiStatus::VARCHAR                               AS API_STATUS,
+--     $1:source::VARCHAR                                  AS SOURCE,
+--     $1:insertId::VARCHAR                                AS INSERT_ID,
+--     $1:pubsubMessageId::VARCHAR                         AS PUBSUB_MESSAGE_ID
+--   FROM @GRIZL.OBSERVABILITY.GCS_LOGS_STAGE
+-- )
+-- FILE_FORMAT = (TYPE = 'JSON');
 
 
 -- ── KNOWLEDGE TABLE (Cortex Search source) ────────────────────────────────────
@@ -179,7 +162,7 @@ CREATE TABLE IF NOT EXISTS GRIZL.KNOWLEDGE.ARTICLES (
   UPDATED_AT    TIMESTAMP_LTZ           COMMENT 'Last update timestamp',
   PRIMARY KEY (ARTICLE_ID)
 )
-DATA_RETENTION_TIME_IN_DAYS = 365
+DATA_RETENTION_TIME_IN_DAYS = 7
 COMMENT = 'Runbooks, postmortems, and knowledge articles. Source for the Cortex Search Service (GRIZL.KNOWLEDGE.ARTICLE_SEARCH_SVC).';
 
 
@@ -187,17 +170,21 @@ COMMENT = 'Runbooks, postmortems, and knowledge articles. Source for the Cortex 
 -- Indexes ARTICLES.BODY for semantic search over postmortems and runbooks.
 -- Used by the external orchestrator Cortex Agent as the Search tool.
 -- The TARGET_LAG controls how quickly new articles appear in search results.
-
-CREATE OR REPLACE CORTEX SEARCH SERVICE GRIZL.KNOWLEDGE.ARTICLE_SEARCH_SVC
-  ON BODY
-  ATTRIBUTES ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS
-  WAREHOUSE = GRIZL_WH
-  TARGET_LAG = '1 hour'
-AS (
-  SELECT ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS, BODY
-  FROM GRIZL.KNOWLEDGE.ARTICLES
-  WHERE BODY IS NOT NULL
-);
+--
+-- REQUIRES: Snowflake Enterprise with Cortex AI features enabled.
+-- Not available on trial accounts (uses EMBED_TEXT_768 internally).
+-- Uncomment and run after upgrading to an Enterprise account.
+--
+-- CREATE OR REPLACE CORTEX SEARCH SERVICE GRIZL.KNOWLEDGE.ARTICLE_SEARCH_SVC
+--   ON BODY
+--   ATTRIBUTES ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS
+--   WAREHOUSE = GRIZL_WH
+--   TARGET_LAG = '1 hour'
+-- AS (
+--   SELECT ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS, BODY
+--   FROM GRIZL.KNOWLEDGE.ARTICLES
+--   WHERE BODY IS NOT NULL
+-- );
 
 
 -- ── LOGICAL VIEWS ─────────────────────────────────────────────────────────────

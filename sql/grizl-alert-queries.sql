@@ -28,89 +28,106 @@
 
 -- ── EXTERNAL NETWORK ACCESS FOR ORCHESTRATOR WEBHOOK ─────────────────────────
 -- Allows Snowflake to call the external incident orchestrator via HTTPS.
--- Replace your-orchestrator.example.com with your actual endpoint hostname.
--- Run as ACCOUNTADMIN.
-
-CREATE OR REPLACE NETWORK RULE GRIZL_ORCHESTRATOR_NETWORK_RULE
-  MODE = EGRESS
-  TYPE = HOST_PORT
-  VALUE_LIST = ('your-orchestrator.example.com:443')
-  COMMENT = 'Allows Snowflake stored procedures to call the incident orchestrator webhook.';
-
-CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION GRIZL_ORCHESTRATOR_INTEGRATION
-  ALLOWED_NETWORK_RULES = (GRIZL_ORCHESTRATOR_NETWORK_RULE)
-  ENABLED = TRUE
-  COMMENT = 'External access integration for the GRIZL incident orchestrator webhook.';
-
-
--- ── NOTIFICATION STORED PROCEDURE ────────────────────────────────────────────
--- Called by the Alert THEN clause. Fetches top anomaly signals and POSTs them
--- to the external orchestrator webhook. The orchestrator calls Cortex Agents
--- for evidence, then creates the GitHub issue.
+-- REQUIRES: Snowflake non-trial account (External Access not available on trial).
+-- After upgrading, replace your-orchestrator.example.com and uncomment:
 --
--- ORCHESTRATOR_WEBHOOK_URL: stored in Snowflake Secret Manager, referenced
--- via the SECRETS clause. Replace the secret reference with your actual secret.
+-- CREATE OR REPLACE NETWORK RULE GRIZL_ORCHESTRATOR_NETWORK_RULE
+--   MODE = EGRESS TYPE = HOST_PORT
+--   VALUE_LIST = ('your-orchestrator.example.com:443')
+--   COMMENT = 'Allows Snowflake stored procedures to call the incident orchestrator webhook.';
+--
+-- CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION GRIZL_ORCHESTRATOR_INTEGRATION
+--   ALLOWED_NETWORK_RULES = (GRIZL_ORCHESTRATOR_NETWORK_RULE)
+--   ENABLED = TRUE
+--   COMMENT = 'External access integration for the GRIZL incident orchestrator webhook.';
+
+
+-- ── NOTIFICATION STORED PROCEDURE (production — requires external access) ─────
+-- Called by the Alert THEN clause on non-trial accounts. POSTs to the orchestrator.
+-- Uncomment after creating GRIZL_ORCHESTRATOR_INTEGRATION and ORCHESTRATOR_WEBHOOK_SECRET.
+--
+-- CREATE OR REPLACE PROCEDURE GRIZL.OBSERVABILITY.SP_NOTIFY_ANOMALY_INCIDENT()
+-- RETURNS VARCHAR LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+-- PACKAGES = ('snowflake-snowpark-python', 'requests') HANDLER = 'handler'
+-- EXTERNAL_ACCESS_INTEGRATIONS = (GRIZL_ORCHESTRATOR_INTEGRATION)
+-- SECRETS = ('webhook_url' = GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET)
+-- COMMENT = 'Fetches top anomaly signals and POSTs to the incident orchestrator webhook.'
+-- AS $$
+-- import requests, json, _snowflake
+-- from datetime import datetime
+-- def handler(session):
+--     webhook_url = _snowflake.get_generic_secret_string('webhook_url')
+--     signals_df = session.sql("""
+--         SELECT SIGNAL_TYPE, SERVICE, ROUTE,
+--           REQUESTS, ERRORS, ACTUAL, BASELINE_MEAN, BASELINE_STDDEV, ANOMALY_SCORE,
+--           TO_CHAR(TIME_BIN, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS TIME_BIN
+--         FROM GRIZL.OBSERVABILITY.GRIZL_RECENT_ANOMALY_SIGNALS
+--         WHERE ANOMALY_SCORE >= 1.5 ORDER BY ANOMALY_SCORE DESC LIMIT 10
+--     """).collect()
+--     if not signals_df: return 'no_anomalies'
+--     signals = [row.as_dict() for row in signals_df]
+--     resp = requests.post(webhook_url,
+--         json={'source':'snowflake_alert','fired_at':datetime.utcnow().isoformat()+'Z','signals':signals,'top_signal':signals[0]},
+--         timeout=15, headers={'Content-Type':'application/json','X-Grizl-Source':'snowflake'})
+--     resp.raise_for_status()
+--     return f'notified: {resp.status_code}'
+-- $$;
+--
+-- CREATE SECRET IF NOT EXISTS GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET
+--   TYPE = GENERIC_STRING
+--   SECRET_STRING = 'https://your-orchestrator.example.com/api/snowflake/incidents'
+--   COMMENT = 'Incident orchestrator webhook URL. Replace with your actual endpoint.';
+
+
+-- ── ALERT LOG TABLE (trial-safe fallback) ────────────────────────────────────
+-- On trial accounts (no External Access), the alert writes fired events here
+-- instead of calling the orchestrator. Replace the alert THEN clause with
+-- SP_NOTIFY_ANOMALY_INCIDENT() after upgrading to a non-trial account.
+
+CREATE TABLE IF NOT EXISTS GRIZL.OBSERVABILITY.ALERT_LOG (
+  FIRED_AT      TIMESTAMP_LTZ NOT NULL,
+  SIGNAL_COUNT  NUMBER,
+  TOP_SIGNAL    VARCHAR,
+  TOP_SERVICE   VARCHAR,
+  TOP_ROUTE     VARCHAR,
+  TOP_SCORE     FLOAT
+)
+DATA_RETENTION_TIME_IN_DAYS = 7
+COMMENT = 'Audit log of GRIZL_ANOMALY_ALERT firings. Used on trial accounts instead of the external orchestrator webhook.';
+
+
+-- ── NOTIFICATION STORED PROCEDURE (trial fallback — SQL only, no external access) ──
+-- Writes the top anomaly signal to ALERT_LOG. Swap for SP_NOTIFY_ANOMALY_INCIDENT
+-- once External Access Integration is available on the account.
 
 CREATE OR REPLACE PROCEDURE GRIZL.OBSERVABILITY.SP_NOTIFY_ANOMALY_INCIDENT()
 RETURNS VARCHAR
-LANGUAGE PYTHON
-RUNTIME_VERSION = '3.11'
-PACKAGES = ('snowflake-snowpark-python', 'requests')
-HANDLER = 'handler'
-EXTERNAL_ACCESS_INTEGRATIONS = (GRIZL_ORCHESTRATOR_INTEGRATION)
-SECRETS = ('webhook_url' = GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET)
-COMMENT = 'Fetches top anomaly signals and POSTs to the incident orchestrator webhook.'
+LANGUAGE SQL
+COMMENT = 'Trial fallback: logs top anomaly to ALERT_LOG instead of calling the orchestrator.'
 AS
 $$
-import requests
-import json
-import _snowflake
-from datetime import datetime
+DECLARE
+  fired_ts   TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP();
+  sig_count  NUMBER        DEFAULT 0;
+  top_signal VARCHAR;
+  top_svc    VARCHAR;
+  top_route  VARCHAR;
+  top_score  FLOAT;
+BEGIN
+  SELECT COUNT(*), MAX_BY(SIGNAL_TYPE, ANOMALY_SCORE),
+         MAX_BY(SERVICE, ANOMALY_SCORE), MAX_BY(ROUTE, ANOMALY_SCORE),
+         MAX(ANOMALY_SCORE)
+    INTO :sig_count, :top_signal, :top_svc, :top_route, :top_score
+  FROM GRIZL.OBSERVABILITY.GRIZL_RECENT_ANOMALY_SIGNALS
+  WHERE ANOMALY_SCORE >= 1.5;
 
-def handler(session):
-    webhook_url = _snowflake.get_generic_secret_string('webhook_url')
+  INSERT INTO GRIZL.OBSERVABILITY.ALERT_LOG
+    (FIRED_AT, SIGNAL_COUNT, TOP_SIGNAL, TOP_SERVICE, TOP_ROUTE, TOP_SCORE)
+  VALUES (:fired_ts, :sig_count, :top_signal, :top_svc, :top_route, :top_score);
 
-    signals_df = session.sql("""
-        SELECT
-          SIGNAL_TYPE, SERVICE, ROUTE,
-          REQUESTS, ERRORS, ACTUAL, BASELINE_MEAN, BASELINE_STDDEV, ANOMALY_SCORE,
-          TO_CHAR(TIME_BIN, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS TIME_BIN
-        FROM GRIZL.OBSERVABILITY.GRIZL_RECENT_ANOMALY_SIGNALS
-        WHERE ANOMALY_SCORE >= 1.5
-        ORDER BY ANOMALY_SCORE DESC
-        LIMIT 10
-    """).collect()
-
-    if not signals_df:
-        return 'no_anomalies'
-
-    signals = [row.as_dict() for row in signals_df]
-    payload = {
-        'source':    'snowflake_alert',
-        'fired_at':  datetime.utcnow().isoformat() + 'Z',
-        'signals':   signals,
-        'top_signal': signals[0],
-    }
-
-    resp = requests.post(
-        webhook_url,
-        json=payload,
-        timeout=15,
-        headers={'Content-Type': 'application/json', 'X-Grizl-Source': 'snowflake'},
-    )
-    resp.raise_for_status()
-    return f'notified: {resp.status_code}'
+  RETURN 'logged: ' || :sig_count || ' signals, top=' || COALESCE(:top_signal, 'none');
+END;
 $$;
-
-
--- ── SECRET FOR ORCHESTRATOR WEBHOOK URL ──────────────────────────────────────
--- Store the orchestrator webhook URL as a Snowflake secret.
--- Replace the placeholder value before running.
-
-CREATE SECRET IF NOT EXISTS GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET
-  TYPE = GENERIC_STRING
-  SECRET_STRING = 'https://your-orchestrator.example.com/api/snowflake/incidents'
-  COMMENT = 'Incident orchestrator webhook URL. Replace with your actual endpoint.';
 
 
 -- ── MAIN ANOMALY ALERT ───────────────────────────────────────────────────────
