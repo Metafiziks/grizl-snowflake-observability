@@ -134,73 +134,79 @@ CREATE OR REPLACE ALERT GRIZL.OBSERVABILITY.GRIZL_ANOMALY_ALERT
 
 
 -- ── SUPPLEMENTARY ALERTS ─────────────────────────────────────────────────────
--- Optional targeted alerts for individual signal types.
--- These can feed Slack notifications via Snowflake Notification Integrations
--- (CREATE NOTIFICATION INTEGRATION ... TYPE = WEBHOOK) instead of the
--- orchestrator webhook, for lower-severity signals that don't warrant a GitHub issue.
+-- Optional targeted alerts for individual signal types, using email notification.
+-- Requires a Snowflake email notification integration (create once as ACCOUNTADMIN).
+-- Replace <ALLOWED_EMAIL> with the recipient address before running.
+
+-- CREATE OR REPLACE NOTIFICATION INTEGRATION GRIZL_EMAIL_INTEGRATION
+--   TYPE = EMAIL
+--   ENABLED = TRUE
+--   ALLOWED_RECIPIENTS = ('<ALLOWED_EMAIL>');
+--
+-- After creating the integration, uncomment and run Alerts 2-4 below.
 
 
--- Alert 2: Backend error rate > 5% in last 5 minutes
-CREATE OR REPLACE ALERT GRIZL.OBSERVABILITY.BACKEND_ERROR_RATE_ALERT
-  WAREHOUSE = GRIZL_WH
-  SCHEDULE  = '5 MINUTES'
-  IF (EXISTS (
-    SELECT 1
-    FROM GRIZL.OBSERVABILITY.DT_HTTP_ERROR_RATE
-    WHERE TIME_BIN >= CURRENT_TIMESTAMP() - INTERVAL '15 minutes'
-      AND ERROR_RATE > 0.05
-      AND REQUESTS >= 20
-    LIMIT 1
-  ))
-  THEN CALL SYSTEM$SEND_SNOWFLAKE_NOTIFICATION(
-    SNOWFLAKE.NOTIFICATION.TEXT_PLAIN(
-      'GRIZL backend error rate exceeded 5% in the last 15 minutes. Check GRIZL.OBSERVABILITY.DT_HTTP_ERROR_RATE.'
-    ),
-    SNOWFLAKE.NOTIFICATION.EMAIL_INTEGRATION_CONFIG(
-      'GRIZL_EMAIL_INTEGRATION',
-      'GRIZL Observability: Backend Error Rate Alert'
-    )
-  );
+-- Alert 2: Backend error rate > 5% in last 15 minutes
+-- CREATE OR REPLACE ALERT GRIZL.OBSERVABILITY.BACKEND_ERROR_RATE_ALERT
+--   WAREHOUSE = GRIZL_WH
+--   SCHEDULE  = '5 MINUTES'
+--   IF (EXISTS (
+--     SELECT 1
+--     FROM GRIZL.OBSERVABILITY.DT_HTTP_ERROR_RATE
+--     WHERE TIME_BIN >= CURRENT_TIMESTAMP() - INTERVAL '15 minutes'
+--       AND ERROR_RATE > 0.05
+--       AND REQUESTS >= 20
+--     LIMIT 1
+--   ))
+--   THEN CALL SYSTEM$SEND_SNOWFLAKE_NOTIFICATION(
+--     SNOWFLAKE.NOTIFICATION.TEXT_PLAIN(
+--       'GRIZL backend error rate exceeded 5% in the last 15 minutes. Check GRIZL.OBSERVABILITY.DT_HTTP_ERROR_RATE.'
+--     ),
+--     SNOWFLAKE.NOTIFICATION.EMAIL_INTEGRATION_CONFIG(
+--       'GRIZL_EMAIL_INTEGRATION',
+--       'GRIZL Observability: Backend Error Rate Alert'
+--     )
+--   );
 
--- Alert 3: P95 latency > 5000ms on any route in last 5 minutes
-CREATE OR REPLACE ALERT GRIZL.OBSERVABILITY.ROUTE_LATENCY_HIGH_ALERT
-  WAREHOUSE = GRIZL_WH
-  SCHEDULE  = '5 MINUTES'
-  IF (EXISTS (
-    SELECT 1
-    FROM GRIZL.OBSERVABILITY.DT_ROUTE_LATENCY
-    WHERE TIME_BIN >= CURRENT_TIMESTAMP() - INTERVAL '15 minutes'
-      AND P95_DURATION_MS > 5000
-      AND REQUESTS >= 10
-    LIMIT 1
-  ))
-  THEN CALL SYSTEM$SEND_SNOWFLAKE_NOTIFICATION(
-    SNOWFLAKE.NOTIFICATION.TEXT_PLAIN(
-      'GRIZL route p95 latency exceeded 5000ms in the last 15 minutes. Check GRIZL.OBSERVABILITY.DT_ROUTE_LATENCY.'
-    ),
-    SNOWFLAKE.NOTIFICATION.EMAIL_INTEGRATION_CONFIG(
-      'GRIZL_EMAIL_INTEGRATION',
-      'GRIZL Observability: High Latency Alert'
-    )
-  );
+-- Alert 3: P95 latency > 5000ms on any route in last 15 minutes
+-- CREATE OR REPLACE ALERT GRIZL.OBSERVABILITY.ROUTE_LATENCY_HIGH_ALERT
+--   WAREHOUSE = GRIZL_WH
+--   SCHEDULE  = '5 MINUTES'
+--   IF (EXISTS (
+--     SELECT 1
+--     FROM GRIZL.OBSERVABILITY.DT_ROUTE_LATENCY
+--     WHERE TIME_BIN >= CURRENT_TIMESTAMP() - INTERVAL '15 minutes'
+--       AND P95_DURATION_MS > 5000
+--       AND REQUESTS >= 10
+--     LIMIT 1
+--   ))
+--   THEN CALL SYSTEM$SEND_SNOWFLAKE_NOTIFICATION(
+--     SNOWFLAKE.NOTIFICATION.TEXT_PLAIN(
+--       'GRIZL route p95 latency exceeded 5000ms in the last 15 minutes. Check GRIZL.OBSERVABILITY.DT_ROUTE_LATENCY.'
+--     ),
+--     SNOWFLAKE.NOTIFICATION.EMAIL_INTEGRATION_CONFIG(
+--       'GRIZL_EMAIL_INTEGRATION',
+--       'GRIZL Observability: High Latency Alert'
+--     )
+--   );
 
 -- Alert 4: Forwarder freshness drop (no batch_sent events in last 15 minutes)
-CREATE OR REPLACE ALERT GRIZL.OBSERVABILITY.FORWARDER_SILENT_ALERT
-  WAREHOUSE = GRIZL_WH
-  SCHEDULE  = '5 MINUTES'
-  IF (NOT EXISTS (
-    SELECT 1
-    FROM GRIZL.OBSERVABILITY.FORWARDER_HEALTH
-    WHERE INGEST_TIMESTAMP >= CURRENT_TIMESTAMP() - INTERVAL '15 minutes'
-      AND EVENT_TYPE = 'batch_sent'
-    LIMIT 1
-  ))
-  THEN CALL SYSTEM$SEND_SNOWFLAKE_NOTIFICATION(
-    SNOWFLAKE.NOTIFICATION.TEXT_PLAIN(
-      'GRIZL log forwarder has not sent any batches in the last 15 minutes. Check grizl-log-forwarder.'
-    ),
-    SNOWFLAKE.NOTIFICATION.EMAIL_INTEGRATION_CONFIG(
-      'GRIZL_EMAIL_INTEGRATION',
-      'GRIZL Observability: Forwarder Silent Alert'
-    )
-  );
+-- CREATE OR REPLACE ALERT GRIZL.OBSERVABILITY.FORWARDER_SILENT_ALERT
+--   WAREHOUSE = GRIZL_WH
+--   SCHEDULE  = '5 MINUTES'
+--   IF (NOT EXISTS (
+--     SELECT 1
+--     FROM GRIZL.OBSERVABILITY.FORWARDER_HEALTH
+--     WHERE INGEST_TIMESTAMP >= CURRENT_TIMESTAMP() - INTERVAL '15 minutes'
+--       AND EVENT_TYPE = 'batch_sent'
+--     LIMIT 1
+--   ))
+--   THEN CALL SYSTEM$SEND_SNOWFLAKE_NOTIFICATION(
+--     SNOWFLAKE.NOTIFICATION.TEXT_PLAIN(
+--       'GRIZL log forwarder has not sent any batches in the last 15 minutes. Check grizl-log-forwarder.'
+--     ),
+--     SNOWFLAKE.NOTIFICATION.EMAIL_INTEGRATION_CONFIG(
+--       'GRIZL_EMAIL_INTEGRATION',
+--       'GRIZL Observability: Forwarder Silent Alert'
+--     )
+--   );
