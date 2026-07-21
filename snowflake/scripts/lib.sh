@@ -52,8 +52,10 @@ require_snow_auth() {
   if [ "${DRY_RUN}" = "true" ]; then
     return 0
   fi
-  snow connection test --connection "${SNOWFLAKE_CONNECTION:-grizl}" >/dev/null 2>&1 \
-    || die "Snowflake connection test failed. Run: snow connection add grizl"
+  # Unset SNOWFLAKE_DATABASE so the test doesn't fail if the DB doesn't exist yet.
+  env -u SNOWFLAKE_DATABASE snow connection test \
+    --connection "${SNOWFLAKE_CONNECTION:-grizl}" >/dev/null 2>&1 \
+    || die "Snowflake connection test failed. Run: snow connection add ${SNOWFLAKE_CONNECTION:-grizl}"
 }
 
 ensure_mutation_allowed() {

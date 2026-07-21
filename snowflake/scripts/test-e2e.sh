@@ -58,12 +58,13 @@ snow_q() {
   snow sql --connection "${SNOWFLAKE_CONNECTION:-grizl}" --query "$1" 2>&1
 }
 
-# ── STEP 0: clear previous test data ─────────────────────────────────────────
+# ── STEP 0: clear previous test data and ensure alert is active ──────────────
 info "Clearing previous test data from RAW_LOGS and ALERT_LOG"
 snow_q "DELETE FROM GRIZL.OBSERVABILITY.RAW_LOGS
         WHERE SERVICE = 'grizl-backend' AND ROUTE = '/api/orders'
           AND DEPLOYMENT_SHA IN ('baseline-sha', 'spike-sha');" > /dev/null
 snow_q "DELETE FROM GRIZL.OBSERVABILITY.ALERT_LOG;" > /dev/null
+snow_q "ALTER ALERT GRIZL.OBSERVABILITY.GRIZL_ANOMALY_ALERT RESUME;" > /dev/null 2>&1 || true
 
 # ── STEP 1: insert baseline traffic (2 days, ~2% error rate) ─────────────────
 info "Inserting baseline traffic (10 000 rows over 2 days)"
