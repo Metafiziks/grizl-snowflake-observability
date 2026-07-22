@@ -95,55 +95,123 @@ DATA_RETENTION_TIME_IN_DAYS = 30
 COMMENT = 'GRIZL application log events. Populated by Snowpipe AUTO_INGEST from GCS Pub/Sub export. Equivalent to the Databricks grizl.observability.raw_logs Delta table.';
 
 
+-- ── SNOWPIPE NOTIFICATION INTEGRATION ───────────────────────────────────────
+-- Required before creating the AUTO_INGEST pipe. Must be run by ACCOUNTADMIN.
+-- After creating the integration, retrieve the Snowflake GCP service account
+-- from DESC NOTIFICATION INTEGRATION and grant it roles/pubsub.subscriber on
+-- the grizl-snowpipe-sf-sub Pub/Sub subscription before creating the pipe.
+--
+-- NOTE: On Snowflake accounts deployed on AWS, the notification integration SA
+-- (kg6j40000@awsuseast2-a5c7.iam.gserviceaccount.com) may fail GCP Pub/Sub
+-- authentication despite correct IAM bindings. If CREATE PIPE returns error
+-- 090040 "Could not monitor ... PERMISSION_DENIED", open a Snowflake support
+-- case referencing the notification integration SA and the subscription path.
+-- Use the TASK_COPY_INTO fallback (below) for near-real-time GCS ingestion.
+
+CREATE OR REPLACE NOTIFICATION INTEGRATION GRIZL_SNOWPIPE_NOTIFICATION_INTEGRATION
+  TYPE = QUEUE
+  NOTIFICATION_PROVIDER = GCP_PUBSUB
+  ENABLED = TRUE
+  GCP_PUBSUB_SUBSCRIPTION_NAME = 'projects/<GCP_PROJECT_ID>/subscriptions/grizl-snowpipe-sf-sub';
+
+
 -- ── SNOWPIPE (AUTO_INGEST) ────────────────────────────────────────────────────
--- AUTO_INGEST = TRUE listens for GCS Object Finalize notifications on the bucket.
--- This is a MANUAL STEP: create the pipe only after completing GCS setup:
---   1. Create a GCS bucket and Pub/Sub notification topic for Snowpipe
---   2. Grant the storage integration service account objectViewer on the bucket:
---        DESCRIBE INTEGRATION GRIZL_GCS_INTEGRATION;
---        -- copy STORAGE_GCP_SERVICE_ACCOUNT value, then:
---        gsutil iam ch serviceAccount:<SA>:objectViewer gs://<GCS_LOGS_BUCKET>
---   3. Grant the service account roles/pubsub.subscriber on the notification topic
---   4. Then run the CREATE PIPE statement below
+-- AUTO_INGEST = TRUE listens for GCS Object Finalize notifications via the
+-- grizl-snowpipe-notifications Pub/Sub topic (wired to gs://grizl-snowflake-logs).
+-- GCS receives JSONL files from the grizl-snowflake-gcs-export Cloud Storage
+-- Pub/Sub subscription (grizl-log-events → GCS, 60s max-duration batches).
 --
--- See: snowflake/manifests/snowpipe-config.example.json for full setup steps.
---
--- CREATE OR REPLACE PIPE GRIZL.OBSERVABILITY.RAW_LOGS_PIPE
---   AUTO_INGEST = TRUE
---   COMMENT = 'Snowpipe AUTO_INGEST from GCS Pub/Sub Cloud Storage export subscription.'
--- AS
--- COPY INTO GRIZL.OBSERVABILITY.RAW_LOGS (
---   INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, DEPLOYMENT_SHA,
---   SEVERITY, EVENT_TYPE, METHOD, ROUTE, STATUS_CODE, DURATION_MS, TRACE_ID,
---   REQUEST_ID, ERROR_TYPE, ERROR_MESSAGE, ERROR_SIGNATURE, PAGE, API_STATUS,
---   SOURCE, INSERT_ID, PUBSUB_MESSAGE_ID
--- )
--- FROM (
---   SELECT
---     COALESCE(TRY_TO_TIMESTAMP_LTZ($1:ingestTimestamp::STRING), CURRENT_TIMESTAMP()) AS INGEST_TIMESTAMP,
---     TRY_TO_TIMESTAMP_LTZ($1:sourceTimestamp::STRING)    AS SOURCE_TIMESTAMP,
---     $1:service::VARCHAR                                 AS SERVICE,
---     $1:environment::VARCHAR                             AS ENVIRONMENT,
---     $1:deploymentSha::VARCHAR                           AS DEPLOYMENT_SHA,
---     $1:severity::VARCHAR                                AS SEVERITY,
---     $1:eventType::VARCHAR                               AS EVENT_TYPE,
---     $1:httpRequest:method::VARCHAR                      AS METHOD,
---     $1:httpRequest:route::VARCHAR                       AS ROUTE,
---     TRY_TO_NUMBER($1:httpRequest:statusCode::VARCHAR)   AS STATUS_CODE,
---     TRY_TO_DOUBLE($1:httpRequest:durationMs::VARCHAR)   AS DURATION_MS,
---     $1:traceId::VARCHAR                                 AS TRACE_ID,
---     $1:requestId::VARCHAR                               AS REQUEST_ID,
---     $1:error:errorType::VARCHAR                         AS ERROR_TYPE,
---     $1:error:message::VARCHAR                           AS ERROR_MESSAGE,
---     $1:error:errorSignature::VARCHAR                    AS ERROR_SIGNATURE,
---     $1:page::VARCHAR                                    AS PAGE,
---     $1:apiStatus::VARCHAR                               AS API_STATUS,
---     $1:source::VARCHAR                                  AS SOURCE,
---     $1:insertId::VARCHAR                                AS INSERT_ID,
---     $1:pubsubMessageId::VARCHAR                         AS PUBSUB_MESSAGE_ID
---   FROM @GRIZL.OBSERVABILITY.GCS_LOGS_STAGE
--- )
--- FILE_FORMAT = (TYPE = 'JSON');
+-- GCS setup:
+--   Bucket  : gs://grizl-snowflake-logs/logs/
+--   Pub/Sub  : grizl-snowflake-gcs-export  (Cloud Storage subscription)
+--   Notify   : grizl-snowpipe-notifications (GCS OBJECT_FINALIZE → Snowpipe)
+--   Pipe SA  : kg6j40000@awsuseast2-a5c7.iam.gserviceaccount.com
+--              - roles/pubsub.subscriber on grizl-snowpipe-sf-sub
+-- Storage SA : kc6j40000@awsuseast2-a5c7.iam.gserviceaccount.com
+--              - roles/storage.objectViewer on gs://grizl-snowflake-logs
+
+CREATE OR REPLACE PIPE GRIZL.OBSERVABILITY.RAW_LOGS_PIPE
+  AUTO_INGEST = TRUE
+  INTEGRATION = 'GRIZL_SNOWPIPE_NOTIFICATION_INTEGRATION'
+  COMMENT = 'Snowpipe AUTO_INGEST from GCS Pub/Sub Cloud Storage export subscription (grizl-log-events → grizl-snowflake-logs).'
+AS
+COPY INTO GRIZL.OBSERVABILITY.RAW_LOGS (
+  INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, DEPLOYMENT_SHA,
+  SEVERITY, EVENT_TYPE, METHOD, ROUTE, STATUS_CODE, DURATION_MS, TRACE_ID,
+  REQUEST_ID, ERROR_TYPE, ERROR_MESSAGE, ERROR_SIGNATURE, PAGE, API_STATUS,
+  SOURCE, INSERT_ID, PUBSUB_MESSAGE_ID
+)
+FROM (
+  SELECT
+    COALESCE(TRY_TO_TIMESTAMP_LTZ($1:ingestTimestamp::STRING), CURRENT_TIMESTAMP()) AS INGEST_TIMESTAMP,
+    TRY_TO_TIMESTAMP_LTZ($1:sourceTimestamp::STRING)    AS SOURCE_TIMESTAMP,
+    $1:service::VARCHAR                                 AS SERVICE,
+    $1:environment::VARCHAR                             AS ENVIRONMENT,
+    $1:deploymentSha::VARCHAR                           AS DEPLOYMENT_SHA,
+    $1:severity::VARCHAR                                AS SEVERITY,
+    $1:eventType::VARCHAR                               AS EVENT_TYPE,
+    $1:httpRequest:method::VARCHAR                      AS METHOD,
+    $1:httpRequest:route::VARCHAR                       AS ROUTE,
+    TRY_TO_NUMBER($1:httpRequest:statusCode::VARCHAR)   AS STATUS_CODE,
+    TRY_TO_DOUBLE($1:httpRequest:durationMs::VARCHAR)   AS DURATION_MS,
+    $1:traceId::VARCHAR                                 AS TRACE_ID,
+    $1:requestId::VARCHAR                               AS REQUEST_ID,
+    $1:error:errorType::VARCHAR                         AS ERROR_TYPE,
+    $1:error:message::VARCHAR                           AS ERROR_MESSAGE,
+    $1:error:errorSignature::VARCHAR                    AS ERROR_SIGNATURE,
+    $1:page::VARCHAR                                    AS PAGE,
+    $1:apiStatus::VARCHAR                               AS API_STATUS,
+    $1:source::VARCHAR                                  AS SOURCE,
+    $1:insertId::VARCHAR                                AS INSERT_ID,
+    $1:pubsubMessageId::VARCHAR                         AS PUBSUB_MESSAGE_ID
+  FROM @GRIZL.OBSERVABILITY.GCS_LOGS_STAGE
+)
+FILE_FORMAT = (TYPE = 'JSON');
+
+
+-- ── SNOWPIPE FALLBACK: TASK-BASED COPY INTO ──────────────────────────────────
+-- Fallback for environments where Snowpipe AUTO_INGEST cannot bind the
+-- notification integration (e.g., error 090040 from Snowflake SA auth).
+-- This task runs COPY INTO every minute; Snowflake deduplicates by file path.
+-- Resume after creation: ALTER TASK GRIZL.OBSERVABILITY.TASK_COPY_INTO RESUME;
+
+CREATE OR REPLACE TASK GRIZL.OBSERVABILITY.TASK_COPY_INTO
+  WAREHOUSE = GRIZL_WH
+  SCHEDULE  = '1 MINUTE'
+  COMMENT   = 'Fallback ingestion: COPY INTO RAW_LOGS from GCS stage every minute.'
+AS
+COPY INTO GRIZL.OBSERVABILITY.RAW_LOGS (
+  INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, DEPLOYMENT_SHA,
+  SEVERITY, EVENT_TYPE, METHOD, ROUTE, STATUS_CODE, DURATION_MS, TRACE_ID,
+  REQUEST_ID, ERROR_TYPE, ERROR_MESSAGE, ERROR_SIGNATURE, PAGE, API_STATUS,
+  SOURCE, INSERT_ID, PUBSUB_MESSAGE_ID
+)
+FROM (
+  SELECT
+    COALESCE(TRY_TO_TIMESTAMP_LTZ($1:ingestTimestamp::STRING), CURRENT_TIMESTAMP()) AS INGEST_TIMESTAMP,
+    TRY_TO_TIMESTAMP_LTZ($1:sourceTimestamp::STRING)    AS SOURCE_TIMESTAMP,
+    $1:service::VARCHAR                                 AS SERVICE,
+    $1:environment::VARCHAR                             AS ENVIRONMENT,
+    $1:deploymentSha::VARCHAR                           AS DEPLOYMENT_SHA,
+    $1:severity::VARCHAR                                AS SEVERITY,
+    $1:eventType::VARCHAR                               AS EVENT_TYPE,
+    $1:httpRequest:method::VARCHAR                      AS METHOD,
+    $1:httpRequest:route::VARCHAR                       AS ROUTE,
+    TRY_TO_NUMBER($1:httpRequest:statusCode::VARCHAR)   AS STATUS_CODE,
+    TRY_TO_DOUBLE($1:httpRequest:durationMs::VARCHAR)   AS DURATION_MS,
+    $1:traceId::VARCHAR                                 AS TRACE_ID,
+    $1:requestId::VARCHAR                               AS REQUEST_ID,
+    $1:error:errorType::VARCHAR                         AS ERROR_TYPE,
+    $1:error:message::VARCHAR                           AS ERROR_MESSAGE,
+    $1:error:errorSignature::VARCHAR                    AS ERROR_SIGNATURE,
+    $1:page::VARCHAR                                    AS PAGE,
+    $1:apiStatus::VARCHAR                               AS API_STATUS,
+    $1:source::VARCHAR                                  AS SOURCE,
+    $1:insertId::VARCHAR                                AS INSERT_ID,
+    $1:pubsubMessageId::VARCHAR                         AS PUBSUB_MESSAGE_ID
+  FROM @GRIZL.OBSERVABILITY.GCS_LOGS_STAGE
+)
+FILE_FORMAT = (TYPE = 'JSON');
 
 
 -- ── KNOWLEDGE TABLE (Cortex Search source) ────────────────────────────────────
