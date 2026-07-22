@@ -28,29 +28,36 @@
 
 -- ── EXTERNAL NETWORK ACCESS FOR ORCHESTRATOR WEBHOOK ─────────────────────────
 -- Allows Snowflake stored procedures to call the incident orchestrator via HTTPS.
--- Replace your-orchestrator.example.com with your actual endpoint hostname.
--- Order matters: the secret must exist before the integration references it.
+-- Order matters: secrets must exist before the integration references them.
 
 CREATE OR REPLACE NETWORK RULE GRIZL.OBSERVABILITY.GRIZL_ORCHESTRATOR_NETWORK_RULE
   MODE = EGRESS
   TYPE = HOST_PORT
-  VALUE_LIST = ('your-orchestrator.example.com:443')
-  COMMENT = 'Allows Snowflake stored procedures to call the incident orchestrator webhook.';
+  VALUE_LIST = ('grizl-backend-maxyrc4qba-uc.a.run.app:443')
+  COMMENT = 'Allows Snowflake stored procedures to call the grizl-backend incident orchestrator.';
 
 
--- ── ORCHESTRATOR WEBHOOK SECRET ──────────────────────────────────────────────
--- Store the orchestrator webhook URL as a Snowflake secret.
--- Replace the placeholder value with your actual endpoint before running.
--- Must be created before the EXTERNAL ACCESS INTEGRATION that references it.
+-- ── ORCHESTRATOR WEBHOOK SECRETS ─────────────────────────────────────────────
+-- Two secrets: the webhook URL and the bearer auth token.
+-- Both must be created before the EXTERNAL ACCESS INTEGRATION that references them.
+-- ORCHESTRATOR_WEBHOOK_AUTH_SECRET value = SNOWFLAKE_ALERT_WEBHOOK_SECRET from GCP.
 
-CREATE SECRET IF NOT EXISTS GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET
+CREATE OR REPLACE SECRET GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET
   TYPE = GENERIC_STRING
-  SECRET_STRING = 'https://your-orchestrator.example.com/api/snowflake/incidents'
-  COMMENT = 'Incident orchestrator webhook URL. Replace with your actual endpoint.';
+  SECRET_STRING = 'https://grizl-backend-maxyrc4qba-uc.a.run.app/api/snowflake/incidents'
+  COMMENT = 'Incident orchestrator webhook URL.';
+
+CREATE SECRET IF NOT EXISTS GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_AUTH_SECRET
+  TYPE = GENERIC_STRING
+  SECRET_STRING = '<SNOWFLAKE_ALERT_WEBHOOK_SECRET>'
+  COMMENT = 'Bearer token for SP_NOTIFY_ANOMALY_INCIDENT → grizl-backend authentication. Value = SNOWFLAKE_ALERT_WEBHOOK_SECRET from GCP Secret Manager.';
 
 CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION GRIZL_ORCHESTRATOR_INTEGRATION
   ALLOWED_NETWORK_RULES = (GRIZL.OBSERVABILITY.GRIZL_ORCHESTRATOR_NETWORK_RULE)
-  ALLOWED_AUTHENTICATION_SECRETS = (GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET)
+  ALLOWED_AUTHENTICATION_SECRETS = (
+    GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET,
+    GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_AUTH_SECRET
+  )
   ENABLED = TRUE
   COMMENT = 'External access integration for the GRIZL incident orchestrator webhook.';
 
@@ -73,8 +80,7 @@ COMMENT = 'Audit log of GRIZL_ANOMALY_ALERT firings.';
 
 -- ── NOTIFICATION STORED PROCEDURE ────────────────────────────────────────────
 -- Fetches top anomaly signals, writes to ALERT_LOG, and POSTs to the orchestrator.
--- Requires: GRIZL_ORCHESTRATOR_INTEGRATION (External Access) and
---           GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET (Generic String secret).
+-- Requires: GRIZL_ORCHESTRATOR_INTEGRATION (External Access) and both secrets.
 -- Degrades gracefully: ALERT_LOG is written before the webhook call, so the
 -- audit trail is preserved even if the orchestrator is unreachable.
 
@@ -85,11 +91,13 @@ RUNTIME_VERSION = '3.11'
 PACKAGES = ('snowflake-snowpark-python', 'requests')
 HANDLER = 'handler'
 EXTERNAL_ACCESS_INTEGRATIONS = (GRIZL_ORCHESTRATOR_INTEGRATION)
-SECRETS = ('webhook_url' = GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET)
+SECRETS = (
+  'webhook_url'  = GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_SECRET,
+  'webhook_auth' = GRIZL.OBSERVABILITY.ORCHESTRATOR_WEBHOOK_AUTH_SECRET
+)
 COMMENT = 'Fetches top anomaly signals, logs to ALERT_LOG, and POSTs to the incident orchestrator.'
 AS
 $$
-import json
 import _snowflake
 import requests
 from datetime import datetime
@@ -98,7 +106,8 @@ def _esc(val):
     return str(val or '').replace("'", "''")
 
 def handler(session):
-    webhook_url = _snowflake.get_generic_secret_string('webhook_url')
+    webhook_url  = _snowflake.get_generic_secret_string('webhook_url')
+    webhook_auth = _snowflake.get_generic_secret_string('webhook_auth')
 
     signals_df = session.sql("""
         SELECT
@@ -143,7 +152,11 @@ def handler(session):
             webhook_url,
             json=payload,
             timeout=15,
-            headers={'Content-Type': 'application/json', 'X-Grizl-Source': 'snowflake'},
+            headers={
+                'Content-Type':   'application/json',
+                'X-Grizl-Source': 'snowflake',
+                'Authorization':  f'Bearer {webhook_auth}',
+            },
         )
         resp.raise_for_status()
         return f'notified: {resp.status_code}, logged: {len(signals)} signals'
