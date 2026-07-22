@@ -171,20 +171,16 @@ COMMENT = 'Runbooks, postmortems, and knowledge articles. Source for the Cortex 
 -- Used by the external orchestrator Cortex Agent as the Search tool.
 -- The TARGET_LAG controls how quickly new articles appear in search results.
 --
--- REQUIRES: Snowflake Enterprise with Cortex AI features enabled.
--- Not available on trial accounts (uses EMBED_TEXT_768 internally).
--- Uncomment and run after upgrading to an Enterprise account.
---
--- CREATE OR REPLACE CORTEX SEARCH SERVICE GRIZL.KNOWLEDGE.ARTICLE_SEARCH_SVC
---   ON BODY
---   ATTRIBUTES ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS
---   WAREHOUSE = GRIZL_WH
---   TARGET_LAG = '1 hour'
--- AS (
---   SELECT ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS, BODY
---   FROM GRIZL.KNOWLEDGE.ARTICLES
---   WHERE BODY IS NOT NULL
--- );
+CREATE OR REPLACE CORTEX SEARCH SERVICE GRIZL.KNOWLEDGE.ARTICLE_SEARCH_SVC
+  ON BODY
+  ATTRIBUTES ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS
+  WAREHOUSE = GRIZL_WH
+  TARGET_LAG = '1 hour'
+AS (
+  SELECT ARTICLE_ID, TITLE, CATEGORY, SERVICE, TAGS, BODY
+  FROM GRIZL.KNOWLEDGE.ARTICLES
+  WHERE BODY IS NOT NULL
+);
 
 
 -- ── LOGICAL VIEWS ─────────────────────────────────────────────────────────────
