@@ -18,6 +18,7 @@
     "sql:alert-queries:dry-run": "bash scripts/sql-exec.sh --dry-run --file ../sql/grizl-alert-queries.sql",
     "sql:alert-queries":         "bash scripts/sql-exec.sh --yes --file ../sql/grizl-alert-queries.sql",
     "test:e2e":                  "bash scripts/test-e2e.sh --yes",
+    "test:e2e:ml":               "bash scripts/test-e2e.sh --yes --ml",
     "test:e2e:wait-alert":       "bash scripts/test-e2e.sh --yes --wait-alert",
     "teardown:dry-run":          "bash scripts/teardown.sh --dry-run --all",
     "teardown":                  "bash scripts/teardown.sh --yes --all"

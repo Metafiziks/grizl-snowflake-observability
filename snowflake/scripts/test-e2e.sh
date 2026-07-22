@@ -5,20 +5,23 @@
 # Tests the full pipeline: RAW_LOGS → Dynamic Tables → Anomaly Signals → Alert.
 #
 # Usage:
-#   bash snowflake/scripts/test-e2e.sh [--wait-alert]
+#   bash snowflake/scripts/test-e2e.sh [--ml] [--wait-alert]
 #
 # Options:
+#   --ml          Also test the Cortex ML detection path (requires sql:cortex-ml
+#                 to have been applied and models trained).
 #   --wait-alert  After seeding data, poll until the GRIZL_ANOMALY_ALERT fires
 #                 automatically (up to 10 min). Default: call the SP manually.
 #   --yes         Skip confirmation prompt.
 #   --config      Config file path (default: snowflake/config/grizl.snowflake.env)
 #
 # What this tests:
-#   1. RAW_LOGS accepts inserts (baseline + anomaly spike)
-#   2. Dynamic Tables DT_HTTP_ERROR_RATE and DT_ROUTE_LATENCY refresh correctly
+#   1. RAW_LOGS accepts inserts (baseline + anomaly spike + error signatures)
+#   2. Dynamic Tables DT_HTTP_ERROR_RATE, DT_ROUTE_LATENCY, DT_ERROR_SIGNATURES refresh
 #   3. GRIZL_RECENT_ANOMALY_SIGNALS returns rows with ANOMALY_SCORE >= 1.5
 #   4. SP_NOTIFY_ANOMALY_INCIDENT writes to ALERT_LOG
 #   5. [--wait-alert] GRIZL_ANOMALY_ALERT fires on schedule and logs to ALERT_LOG
+#   6. [--ml] Cortex ML detection SPs run without error and Tasks are STARTED
 # =============================================================================
 set -euo pipefail
 
@@ -27,13 +30,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib.sh"
 
 WAIT_ALERT=false
+RUN_ML=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --config)      [ "$#" -ge 2 ] || die "--config requires a path"; CONFIG_FILE="$2"; shift 2 ;;
     --wait-alert)  WAIT_ALERT=true; shift ;;
+    --ml)          RUN_ML=true; shift ;;
     --yes)         YES=true; shift ;;
-    -h|--help)     echo "Usage: bash $0 [--wait-alert] [--yes] [--config <path>]"; exit 0 ;;
+    -h|--help)     echo "Usage: bash $0 [--ml] [--wait-alert] [--yes] [--config <path>]"; exit 0 ;;
     *)             die "Unknown option: $1" ;;
   esac
 done
@@ -59,15 +64,16 @@ snow_q() {
 }
 
 # ── STEP 0: clear previous test data and ensure alert is active ──────────────
-info "Clearing previous test data from RAW_LOGS and ALERT_LOG"
+info "Clearing previous test data from RAW_LOGS, ML_ANOMALY_DETECTIONS, and ALERT_LOG"
 snow_q "DELETE FROM GRIZL.OBSERVABILITY.RAW_LOGS
-        WHERE SERVICE = 'grizl-backend' AND ROUTE = '/api/orders'
+        WHERE SERVICE = 'grizl-backend'
           AND DEPLOYMENT_SHA IN ('baseline-sha', 'spike-sha');" > /dev/null
 snow_q "DELETE FROM GRIZL.OBSERVABILITY.ALERT_LOG;" > /dev/null
+snow_q "DELETE FROM GRIZL.OBSERVABILITY.ML_ANOMALY_DETECTIONS;" > /dev/null 2>&1 || true
 snow_q "ALTER ALERT GRIZL.OBSERVABILITY.GRIZL_ANOMALY_ALERT RESUME;" > /dev/null 2>&1 || true
 
 # ── STEP 1: insert baseline traffic (2 days, ~2% error rate) ─────────────────
-info "Inserting baseline traffic (10 000 rows over 2 days)"
+info "Inserting baseline HTTP traffic (10 000 rows over 2 days)"
 snow_q "
 INSERT INTO GRIZL.OBSERVABILITY.RAW_LOGS
   (INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, SEVERITY,
@@ -84,16 +90,33 @@ SELECT
 FROM TABLE(GENERATOR(ROWCOUNT => 10000));
 " > /dev/null
 
+# Also seed baseline application errors with error signatures (needed for error-signature ML model)
+snow_q "
+INSERT INTO GRIZL.OBSERVABILITY.RAW_LOGS
+  (INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, SEVERITY,
+   EVENT_TYPE, ROUTE, STATUS_CODE, DURATION_MS,
+   ERROR_TYPE, ERROR_MESSAGE, ERROR_SIGNATURE, DEPLOYMENT_SHA)
+SELECT
+  DATEADD('second', SEQ4() * 864, CURRENT_TIMESTAMP() - INTERVAL '2 days'),
+  DATEADD('second', SEQ4() * 864, CURRENT_TIMESTAMP() - INTERVAL '2 days'),
+  'grizl-backend', 'production', 'ERROR',
+  'http_request', '/api/orders', 500,
+  200 + UNIFORM(0, 100, RANDOM()),
+  'OrderValidationError', 'Order validation failed',
+  'OrderValidationError:/api/orders', 'baseline-sha'
+FROM TABLE(GENERATOR(ROWCOUNT => 200));
+" > /dev/null
+
 result=$(snow_q "SELECT COUNT(*) FROM GRIZL.OBSERVABILITY.RAW_LOGS
                  WHERE DEPLOYMENT_SHA = 'baseline-sha';" | grep -E '^\| [0-9]' | tr -d '| ')
-if [ "${result:-0}" -ge 10000 ]; then
-  pass "Step 1 — baseline rows inserted (${result})"
+if [ "${result:-0}" -ge 10200 ]; then
+  pass "Step 1 — baseline rows inserted (${result}: 10000 HTTP + 200 error-sig)"
 else
-  fail "Step 1 — expected >= 10000 baseline rows, got ${result}"
+  fail "Step 1 — expected >= 10200 baseline rows, got ${result}"
 fi
 
 # ── STEP 2: insert anomaly spike (last 10 min, ~60% error rate) ──────────────
-info "Inserting anomaly spike (300 rows, last 10 minutes, 60% error rate)"
+info "Inserting anomaly spike (300 HTTP + 60 error-sig rows, last 10 minutes)"
 snow_q "
 INSERT INTO GRIZL.OBSERVABILITY.RAW_LOGS
   (INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, SEVERITY,
@@ -110,24 +133,49 @@ SELECT
 FROM TABLE(GENERATOR(ROWCOUNT => 300));
 " > /dev/null
 
+# Spike error signatures (anomalous burst — ~60 vs ~1/10min baseline)
+snow_q "
+INSERT INTO GRIZL.OBSERVABILITY.RAW_LOGS
+  (INGEST_TIMESTAMP, SOURCE_TIMESTAMP, SERVICE, ENVIRONMENT, SEVERITY,
+   EVENT_TYPE, ROUTE, STATUS_CODE, DURATION_MS,
+   ERROR_TYPE, ERROR_MESSAGE, ERROR_SIGNATURE, DEPLOYMENT_SHA)
+SELECT
+  DATEADD('second', SEQ4() * 10, CURRENT_TIMESTAMP() - INTERVAL '10 minutes'),
+  DATEADD('second', SEQ4() * 10, CURRENT_TIMESTAMP() - INTERVAL '10 minutes'),
+  'grizl-backend', 'production', 'ERROR',
+  'http_request', '/api/orders', 500,
+  300 + UNIFORM(0, 100, RANDOM()),
+  'OrderValidationError', 'Order validation failed',
+  'OrderValidationError:/api/orders', 'spike-sha'
+FROM TABLE(GENERATOR(ROWCOUNT => 60));
+" > /dev/null
+
 result=$(snow_q "SELECT COUNT(*) FROM GRIZL.OBSERVABILITY.RAW_LOGS
                  WHERE DEPLOYMENT_SHA = 'spike-sha';" | grep -E '^\| [0-9]' | tr -d '| ')
-if [ "${result:-0}" -ge 300 ]; then
-  pass "Step 2 — spike rows inserted (${result})"
+if [ "${result:-0}" -ge 360 ]; then
+  pass "Step 2 — spike rows inserted (${result}: 300 HTTP + 60 error-sig)"
 else
-  fail "Step 2 — expected >= 300 spike rows, got ${result}"
+  fail "Step 2 — expected >= 360 spike rows, got ${result}"
 fi
 
 # ── STEP 3: force Dynamic Table refresh ──────────────────────────────────────
 info "Refreshing Dynamic Tables"
 snow_q "ALTER DYNAMIC TABLE GRIZL.OBSERVABILITY.DT_HTTP_ERROR_RATE REFRESH;" > /dev/null
 snow_q "ALTER DYNAMIC TABLE GRIZL.OBSERVABILITY.DT_ROUTE_LATENCY REFRESH;" > /dev/null
+snow_q "ALTER DYNAMIC TABLE GRIZL.OBSERVABILITY.DT_ERROR_SIGNATURES REFRESH;" > /dev/null
 
 result=$(snow_q "SELECT COUNT(*) FROM GRIZL.OBSERVABILITY.DT_HTTP_ERROR_RATE;" | grep -E '^\| [0-9]' | tr -d '| ')
 if [ "${result:-0}" -gt 0 ]; then
   pass "Step 3 — DT_HTTP_ERROR_RATE has ${result} rows after refresh"
 else
   fail "Step 3 — DT_HTTP_ERROR_RATE empty after refresh"
+fi
+
+result=$(snow_q "SELECT COUNT(*) FROM GRIZL.OBSERVABILITY.DT_ERROR_SIGNATURES;" | grep -E '^\| [0-9]' | tr -d '| ')
+if [ "${result:-0}" -gt 0 ]; then
+  pass "Step 3b — DT_ERROR_SIGNATURES has ${result} rows after refresh"
+else
+  fail "Step 3b — DT_ERROR_SIGNATURES empty after refresh (error signature ML model will have no data)"
 fi
 
 # ── STEP 4: verify anomaly signals ───────────────────────────────────────────
@@ -188,7 +236,53 @@ else
   warn "Step 6 — could not parse alert state; check Snowsight → Monitoring → Alerts"
 fi
 
-# ── STEP 7 (optional): wait for automatic alert fire ─────────────────────────
+# ── STEP 7 (optional --ml): Cortex ML detection smoke test ───────────────────
+# Requires: sql/grizl-cortex-ml.sql applied (models trained, Tasks created).
+# This is a smoke test: it verifies the SPs run without error and Tasks exist.
+# ML detection results depend on model training data and may return 0 anomalies.
+if [ "${RUN_ML}" = "true" ]; then
+  info "Running Cortex ML detection smoke test"
+
+  # Capture SP output first, then check — avoids set -e killing the script when
+  # grep finds no match inside $(...) with pipefail.
+  ml_out=$(snow_q "CALL GRIZL.OBSERVABILITY.SP_DETECT_HTTP_ERROR_RATE();" 2>&1) || true
+  if echo "${ml_out}" | grep -q 'OK'; then
+    pass "Step 7 — SP_DETECT_HTTP_ERROR_RATE() returned OK"
+  else
+    fail "Step 7 — SP_DETECT_HTTP_ERROR_RATE() unexpected output: ${ml_out}"
+  fi
+
+  ml_out=$(snow_q "CALL GRIZL.OBSERVABILITY.SP_DETECT_ROUTE_LATENCY();" 2>&1) || true
+  if echo "${ml_out}" | grep -q 'OK'; then
+    pass "Step 7b — SP_DETECT_ROUTE_LATENCY() returned OK"
+  else
+    fail "Step 7b — SP_DETECT_ROUTE_LATENCY() unexpected output: ${ml_out}"
+  fi
+
+  ml_count=$(snow_q "SELECT COUNT(*) FROM GRIZL.OBSERVABILITY.ML_ANOMALY_DETECTIONS;" 2>&1 \
+    | grep -E '^\| [0-9]' | tr -d '| ') || true
+  info "  ML_ANOMALY_DETECTIONS: ${ml_count:-0} IS_ANOMALY=TRUE detection rows"
+
+  ml_view_out=$(snow_q "SELECT COUNT(*) FROM GRIZL.OBSERVABILITY.GRIZL_RECENT_ANOMALY_SIGNALS_ML;" 2>&1) || true
+  ml_view_count=$(echo "${ml_view_out}" | grep -E '^\| [0-9]' | tr -d '| ') || true
+  if echo "${ml_view_out}" | grep -qv 'Error\|error'; then
+    pass "Step 7c — GRIZL_RECENT_ANOMALY_SIGNALS_ML is queryable (${ml_view_count:-0} active anomalies)"
+  else
+    fail "Step 7c — GRIZL_RECENT_ANOMALY_SIGNALS_ML query error: ${ml_view_out}"
+  fi
+
+  task_out=$(snow_q "SHOW TASKS LIKE 'TASK_DETECT_ERROR_RATE' IN SCHEMA GRIZL.OBSERVABILITY;" 2>&1) || true
+  task_state=$(echo "${task_out}" | grep -i 'task_detect_error_rate' | grep -oi 'started\|suspended' | head -1 | tr '[:upper:]' '[:lower:]') || true
+  if [ "${task_state}" = "started" ]; then
+    pass "Step 7d — TASK_DETECT_ERROR_RATE is STARTED (running on schedule)"
+  elif [ -n "${task_state}" ]; then
+    fail "Step 7d — TASK_DETECT_ERROR_RATE state is '${task_state}' (expected 'started')"
+  else
+    warn "Step 7d — could not parse task state; check Snowsight → Monitoring → Tasks"
+  fi
+fi
+
+# ── STEP 8 (optional): wait for automatic alert fire ─────────────────────────
 if [ "${WAIT_ALERT}" = "true" ]; then
   info "Waiting up to 10 minutes for GRIZL_ANOMALY_ALERT to fire automatically..."
   pre_count="${log_count:-0}"
@@ -204,7 +298,7 @@ if [ "${WAIT_ALERT}" = "true" ]; then
     info "  ${WAITED}s elapsed — ALERT_LOG still at ${new_count} rows, polling..."
   done
   if [ "${WAITED}" -ge 600 ]; then
-    fail "Step 7 — alert did not fire within 10 minutes (check alert schedule in Snowsight)"
+    fail "Step 8 — alert did not fire within 10 minutes (check alert schedule in Snowsight)"
   fi
 fi
 

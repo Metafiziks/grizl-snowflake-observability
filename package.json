@@ -19,6 +19,7 @@
     "snowflake:sql:alert-queries:dry-run": "npm --prefix snowflake run sql:alert-queries:dry-run",
     "snowflake:sql:alert-queries":         "npm --prefix snowflake run sql:alert-queries",
     "snowflake:test:e2e":                  "npm --prefix snowflake run test:e2e",
+    "snowflake:test:e2e:ml":               "npm --prefix snowflake run test:e2e:ml",
     "snowflake:test:e2e:wait-alert":       "npm --prefix snowflake run test:e2e:wait-alert",
     "snowflake:teardown:dry-run":          "npm --prefix snowflake run teardown:dry-run",
     "snowflake:teardown":                  "npm --prefix snowflake run teardown"
